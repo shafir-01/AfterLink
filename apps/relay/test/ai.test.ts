@@ -66,7 +66,7 @@ describe('availability and limits', () => {
 describe('compile', () => {
   it('returns a draft with model, latency, usage and rights needing approval', async () => {
     create.mockResolvedValueOnce(reply({ questions: [], capsule: draft() }));
-    const res = await build().call('/api/mission/compile', { objective });
+    const res = await build().call('/api/mission/compile', { objective, issuer: 'issuer-key' });
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.status).toBe('draft');
@@ -82,7 +82,7 @@ describe('compile', () => {
 
   it('strips rights the organiser did not describe', async () => {
     create.mockResolvedValueOnce(reply({ questions: [], capsule: draft('5 defibrillators') }));
-    const body = await (await build().call('/api/mission/compile', { objective })).json();
+    const body = await (await build().call('/api/mission/compile', { objective, issuer: 'issuer-key' })).json();
     expect(body.rights).toEqual([]);
     expect(body.rejectedRights).toEqual(['chair']);
     expect(body.approvalRequired).toBe(false);
@@ -93,7 +93,7 @@ describe('compile', () => {
 
   it('returns clarifying questions', async () => {
     create.mockResolvedValueOnce(reply({ questions: ['Which team holds the AED?'], capsule: null }));
-    const body = await (await build().call('/api/mission/compile', { objective })).json();
+    const body = await (await build().call('/api/mission/compile', { objective, issuer: 'issuer-key' })).json();
     expect(body).toMatchObject({ status: 'questions', questions: ['Which team holds the AED?'] });
     expect(validate).not.toHaveBeenCalled();
   });
@@ -101,7 +101,7 @@ describe('compile', () => {
   it('retries once with the errors, then succeeds', async () => {
     validate.mockReturnValueOnce({ ok: false, errors: ['tasks[0].objective unknown'] });
     create.mockResolvedValueOnce(reply({ questions: [], capsule: draft() })).mockResolvedValueOnce(reply({ questions: [], capsule: draft() }));
-    const body = await (await build().call('/api/mission/compile', { objective })).json();
+    const body = await (await build().call('/api/mission/compile', { objective, issuer: 'issuer-key' })).json();
     expect(body.status).toBe('draft');
     expect(create).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(create.mock.calls[1][0].messages)).toContain('tasks[0].objective unknown');
@@ -111,7 +111,7 @@ describe('compile', () => {
   it('returns the errors after a second invalid draft', async () => {
     validate.mockReturnValue({ ok: false, errors: ['bad'] });
     create.mockResolvedValue(reply({ questions: [], capsule: draft() }));
-    const res = await build().call('/api/mission/compile', { objective });
+    const res = await build().call('/api/mission/compile', { objective, issuer: 'issuer-key' });
     expect(res.status).toBe(422);
     expect(await res.json()).toMatchObject({ status: 'invalid', errors: ['bad'] });
     expect(create).toHaveBeenCalledTimes(2);
