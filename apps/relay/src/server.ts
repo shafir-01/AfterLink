@@ -1,10 +1,11 @@
 import { readFile, stat } from 'node:fs/promises';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Hono, type Context } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -13,6 +14,22 @@ import { createContext, type RelayContext } from './context.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const MAX_SOCKETS_PER_IP = 32;
+const MAX_FRAME_BYTES = 262_144;
+const MAX_FRAMES_PER_WINDOW = 400;
+const FRAME_WINDOW_MS = 10_000;
+const MAX_HELLOS_PER_SOCKET = 10;
+
+const KB = 1024;
+const BODY_LIMITS: [RegExp, number][] = [
+  [/^\/api\/voice\/transcribe$/, 9 * KB * KB],
+  [/^\/api\/debrief\/narrate$/, KB * KB],
+  [/^\/report\/debrief$/, KB * KB],
+  [/^\/api\/mission\/compile$/, 64 * KB],
+  [/^\/api\/triage$/, 32 * KB],
+  [/^\/api\/voice\/brief$/, 16 * KB],
+  [/^\/ingress\/request$/, 16 * KB],
+];
+const DEFAULT_BODY_LIMIT = 4 * KB;
 const SUB_ROUTERS = ['ai', 'voice', 'ingress'];
 
 const MIME: Record<string, string> = {
@@ -32,18 +49,34 @@ const MIME: Record<string, string> = {
   '.map': 'application/json',
 };
 
-function ipFrom(forwarded: string | undefined, socketAddr: string | undefined): string {
-  return forwarded?.split(',')[0]?.trim() || socketAddr || 'unknown';
+/**
+ * Client address for limits. Forwarded headers are only trusted for the number of proxy hops the host
+ * adds (one on Render), counted from the right, because the left side is written by the client.
+ */
+export function ipFrom(forwarded: string | undefined, socketAddr: string | undefined, hops = 0): string {
+  if (hops > 0 && forwarded) {
+    const parts = forwarded.split(',').map((x) => x.trim()).filter(Boolean);
+    const pick = parts[Math.max(0, parts.length - hops)];
+    if (pick) return pick.slice(0, 64);
+  }
+  return socketAddr || 'unknown';
 }
+
+export function trustedHops(env: NodeJS.ProcessEnv): number {
+  const n = Number(env.AFTERLINK_TRUST_PROXY_HOPS);
+  if (env.AFTERLINK_TRUST_PROXY_HOPS !== undefined && env.AFTERLINK_TRUST_PROXY_HOPS !== '' && Number.isInteger(n) && n >= 0) return n;
+  return env.RENDER ? 1 : 0;
+}
+
+const digest = (v: string) => createHash('sha256').update(v).digest();
+export const safeEqual = (a: string, b: string) => timingSafeEqual(digest(a), digest(b));
 
 function tokenOk(c: Context, ctx: RelayContext): boolean | null {
   const want = ctx.env.AFTERLINK_ADMIN_TOKEN;
   if (!want) return null;
   const auth = c.req.header('authorization') ?? '';
   const got = auth.startsWith('Bearer ') ? auth.slice(7) : (c.req.header('x-admin-token') ?? '');
-  const a = Buffer.from(got);
-  const b = Buffer.from(want);
-  return a.length === b.length && timingSafeEqual(a, b);
+  return safeEqual(got, want);
 }
 
 async function loadSubRouters(app: Hono, ctx: RelayContext): Promise<void> {
@@ -73,13 +106,14 @@ async function loadSubRouters(app: Hono, ctx: RelayContext): Promise<void> {
 
 export async function createApp(ctx: RelayContext, opts: { webDist?: string } = {}): Promise<Hono> {
   const app = new Hono();
-  const webOrigin = ctx.env.AFTERLINK_WEB_ORIGIN?.replace(/\/$/, '');
+  const webOrigins = (ctx.env.AFTERLINK_WEB_ORIGIN ?? '').split(',').map((o) => o.trim().replace(/\/$/, '')).filter(Boolean);
+  const hops = trustedHops(ctx.env);
   const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 
   app.use(
     '*',
     cors({
-      origin: (origin) => (origin && (origin === webOrigin || local.test(origin)) ? origin : null),
+      origin: (origin) => (origin && (webOrigins.includes(origin) || local.test(origin)) ? origin : null),
       allowHeaders: ['content-type', 'authorization', 'x-admin-token'],
       allowMethods: ['GET', 'POST', 'OPTIONS'],
     }),
@@ -88,8 +122,26 @@ export async function createApp(ctx: RelayContext, opts: { webDist?: string } = 
   app.use('*', async (c, next) => {
     if (c.req.method === 'OPTIONS') return next();
     const sock = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket;
-    const ip = ipFrom(c.req.header('x-forwarded-for'), sock?.remoteAddress);
+    const ip = ipFrom(c.req.header('x-forwarded-for'), sock?.remoteAddress, hops);
     if (!ctx.limits.hit(ip)) return c.json({ error: 'rate-limited' }, 429, { 'retry-after': '60' });
+
+    if (c.req.method === 'POST') {
+      const path = c.req.path;
+      const origin = c.req.header('origin');
+      if (origin && !webOrigins.includes(origin) && !local.test(origin)) {
+        let sameHost = false;
+        try {
+          sameHost = new URL(origin).host === c.req.header('host');
+        } catch {
+          sameHost = false;
+        }
+        if (!sameHost) return c.json({ error: 'origin not allowed' }, 403);
+      }
+      const bucket = path.startsWith('/admin/') ? 'admin' : /^\/(api|report)\//.test(path) ? 'paid' : null;
+      if (bucket && !ctx.limits.hit(ip, bucket)) return c.json({ error: 'rate-limited' }, 429, { 'retry-after': '60' });
+      const max = BODY_LIMITS.find(([re]) => re.test(path))?.[1] ?? DEFAULT_BODY_LIMIT;
+      return bodyLimit({ maxSize: max, onError: (cc) => cc.json({ error: 'payload too large' }, 413) })(c, next);
+    }
     return next();
   });
 
@@ -162,12 +214,17 @@ export async function createApp(ctx: RelayContext, opts: { webDist?: string } = 
     });
   }
 
+  app.onError((e, c) => {
+    console.error(`request failed: ${e.name}`);
+    return c.json({ error: 'internal error' }, 500);
+  });
   app.notFound((c) => c.json({ error: 'not found' }, 404));
   return app;
 }
 
 export function attachSignal(server: Server, ctx: RelayContext): { closeAll(): void } {
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1_000_000 });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+  const hops = trustedHops(ctx.env);
   const perIp = new Map<string, number>();
 
   server.on('upgrade', (req, socket, head) => {
@@ -177,7 +234,7 @@ export function attachSignal(server: Server, ctx: RelayContext): { closeAll(): v
       return;
     }
     const fwd = req.headers['x-forwarded-for'];
-    const ip = ipFrom(Array.isArray(fwd) ? fwd[0] : fwd, req.socket.remoteAddress);
+    const ip = ipFrom(Array.isArray(fwd) ? fwd.join(',') : fwd, req.socket.remoteAddress, hops);
     if (!ctx.hq.alive() || (perIp.get(ip) ?? 0) >= MAX_SOCKETS_PER_IP || !ctx.limits.hit(ip)) {
       socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
       socket.destroy();
@@ -189,7 +246,9 @@ export function attachSignal(server: Server, ctx: RelayContext): { closeAll(): v
       const release = () => {
         if (released) return;
         released = true;
-        perIp.set(ip, Math.max(0, (perIp.get(ip) ?? 1) - 1));
+        const left = (perIp.get(ip) ?? 1) - 1;
+        if (left <= 0) perIp.delete(ip);
+        else perIp.set(ip, left);
       };
       const session = ctx.hq.open(
         (m) => {
@@ -205,9 +264,27 @@ export function attachSignal(server: Server, ctx: RelayContext): { closeAll(): v
         ws.close(1013, 'unavailable');
         return;
       }
+      let windowStart = Date.now();
+      let frames = 0;
+      let hellos = 0;
       ws.on('message', (data) => {
+        const t = Date.now();
+        if (t - windowStart >= FRAME_WINDOW_MS) {
+          windowStart = t;
+          frames = 0;
+        }
+        if (++frames > MAX_FRAMES_PER_WINDOW) {
+          ws.close(1008, 'too many messages');
+          return;
+        }
         try {
-          session.receive(JSON.parse(data.toString()) as SignalMessage);
+          const m = JSON.parse(data.toString()) as SignalMessage;
+          if (m.t === 'ingress') return;
+          if (m.t === 'hello' && ++hellos > MAX_HELLOS_PER_SOCKET) {
+            ws.close(1008, 'too many joins');
+            return;
+          }
+          session.receive(m);
         } catch {
           ws.close(1003, 'bad message');
         }
