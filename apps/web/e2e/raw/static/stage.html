@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>raw stage</title>
+<div id="frames"></div>
+<script>
+  const ids = ['A', 'B', 'C', 'D'];
+  const frames = {};
+  let worker = null;
+
+  const attach = (id) => {
+    const ch = new MessageChannel();
+    worker.postMessage({ t: 'attach' }, [ch.port1]);
+    frames[id].contentWindow.postMessage({ t: 'port' }, '*', [ch.port2]);
+  };
+
+  window.stage = {
+    load: () =>
+      Promise.all(
+        ids.map(
+          (id) =>
+            new Promise((resolve) => {
+              const f = document.createElement('iframe');
+              f.src = `device.html?id=${id}`;
+              f.name = id;
+              f.onload = resolve;
+              frames[id] = f;
+              document.getElementById('frames').append(f);
+            }),
+        ),
+      ),
+    startHub() {
+      worker = new Worker('hub-worker.js');
+    },
+    attach,
+    attachAll: () => ids.forEach(attach),
+    killHub() {
+      worker.terminate();
+      worker = null;
+    },
+    hubAlive: () => worker !== null,
+    reloadDevice: (id) =>
+      new Promise((resolve) => {
+        frames[id].addEventListener('load', resolve, { once: true });
+        frames[id].contentWindow.location.reload();
+      }),
+  };
+</script>
