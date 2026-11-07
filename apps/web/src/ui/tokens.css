@@ -1,0 +1,127 @@
+:root {
+  color-scheme: light dark;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-caption: 0.8125rem;
+  --text-label: 0.9375rem;
+  --text-body: 1.0625rem;
+  --text-heading: 1.375rem;
+  --text-title: clamp(1.875rem, 1.3rem + 2.4vw, 2.75rem);
+  --text-display: clamp(2.75rem, 1.6rem + 5.6vw, 5.5rem);
+
+  --space-0: 0;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+  --space-9: 6rem;
+  --space-10: 8rem;
+
+  --radius-s: 0.5rem;
+  --radius-m: 0.875rem;
+  --radius-l: 1.375rem;
+  --radius-full: 999px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 140ms;
+  --dur-base: 240ms;
+  --dur-slow: 480ms;
+
+  --tap: 2.75rem;
+  --measure: 38rem;
+
+  --bg: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-subtle: #f5f5f7;
+  --fg: #0b0b0c;
+  --fg-muted: #5c5c63;
+  --line: #e2e2e6;
+  --line-strong: #8a8a92;
+  --scrim: rgb(0 0 0 / 0.32);
+
+  --accent: #0a57d0;
+  --accent-hover: #0848ae;
+  --accent-fg: #ffffff;
+  --focus: #0a57d0;
+
+  --ok: #1a7a3c;
+  --warn: #8f5b00;
+  --stop: #c0261f;
+
+  --team-medics: #c22f49;
+  --team-access: #7339c4;
+  --team-facilities: #0a7670;
+  --team-supply: #9a5e00;
+
+  --text: var(--fg);
+  --muted: var(--fg-muted);
+  --surface: var(--bg-subtle);
+  --bad: var(--stop);
+  --on-accent: var(--accent-fg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #000000;
+    --bg-raised: #121214;
+    --bg-subtle: #161618;
+    --fg: #f5f5f7;
+    --fg-muted: #a1a1a8;
+    --line: #2a2a2e;
+    --line-strong: #77777f;
+    --scrim: rgb(0 0 0 / 0.6);
+
+    --accent: #4b9bff;
+    --accent-hover: #74b2ff;
+    --accent-fg: #000000;
+    --focus: #74b2ff;
+
+    --ok: #4cc774;
+    --warn: #e8b64c;
+    --stop: #ff7f75;
+
+    --team-medics: #ff8295;
+    --team-access: #bb9af7;
+    --team-facilities: #3dd0c4;
+    --team-supply: #eeb24c;
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #000000;
+  --bg-raised: #121214;
+  --bg-subtle: #161618;
+  --fg: #f5f5f7;
+  --fg-muted: #a1a1a8;
+  --line: #2a2a2e;
+  --line-strong: #77777f;
+  --scrim: rgb(0 0 0 / 0.6);
+
+  --accent: #4b9bff;
+  --accent-hover: #74b2ff;
+  --accent-fg: #000000;
+  --focus: #74b2ff;
+
+  --ok: #4cc774;
+  --warn: #e8b64c;
+  --stop: #ff7f75;
+
+  --team-medics: #ff8295;
+  --team-access: #bb9af7;
+  --team-facilities: #3dd0c4;
+  --team-supply: #eeb24c;
+}

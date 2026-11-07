@@ -1,0 +1,210 @@
+.al-text {
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+.al-text--display {
+  font-family: var(--font-display);
+  font-size: var(--text-display);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+.al-text--title {
+  font-family: var(--font-display);
+  font-size: var(--text-title);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.022em;
+}
+.al-text--heading {
+  font-family: var(--font-display);
+  font-size: var(--text-heading);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.014em;
+}
+.al-text--body {
+  font-size: var(--text-body);
+}
+.al-text--label {
+  font-size: var(--text-label);
+  font-weight: 500;
+}
+.al-text--caption {
+  font-size: var(--text-caption);
+}
+.al-text--mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.al-tone--muted {
+  color: var(--fg-muted);
+}
+.al-tone--accent {
+  color: var(--accent);
+}
+.al-tone--ok {
+  color: var(--ok);
+}
+.al-tone--warn {
+  color: var(--warn);
+}
+.al-tone--stop {
+  color: var(--stop);
+}
+.al-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.al-stack {
+  display: flex;
+  min-width: 0;
+}
+
+.al-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--tap);
+  padding: 0 var(--space-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--text-label);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.al-button--large {
+  min-height: 3.5rem;
+  padding: 0 var(--space-6);
+  font-size: var(--text-body);
+}
+.al-button--block {
+  display: flex;
+  width: 100%;
+}
+.al-button--primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.al-button--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.al-button--secondary {
+  border-color: var(--line-strong);
+}
+.al-button--secondary:hover:not(:disabled) {
+  background: var(--bg-subtle);
+}
+.al-button--quiet {
+  padding: 0 var(--space-3);
+  color: var(--fg-muted);
+}
+.al-button--quiet:hover:not(:disabled) {
+  color: var(--fg);
+}
+.al-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.al-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: var(--text-caption);
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.al-badge__dot {
+  flex: none;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: var(--badge-color, var(--line-strong));
+}
+
+.al-sheet {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  overflow: hidden;
+}
+.al-sheet::backdrop {
+  background: transparent;
+}
+.al-sheet__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+}
+.al-sheet__panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-height: 88dvh;
+  padding: var(--space-6) var(--space-5) calc(var(--space-6) + env(safe-area-inset-bottom));
+  border-radius: var(--radius-l) var(--radius-l) 0 0;
+  background: var(--bg-raised);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.al-sheet__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+@media (min-width: 48rem) {
+  .al-sheet__panel {
+    left: auto;
+    top: 0;
+    width: min(30rem, 100%);
+    max-height: none;
+    padding: var(--space-7) var(--space-6);
+    border-radius: 0;
+    border-left: 1px solid var(--line);
+  }
+}
+
+.al-center {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: var(--space-5);
+  text-align: center;
+}
+.al-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
