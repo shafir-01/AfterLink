@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const MEMORY_LIMIT = 200;
+const KEY = /^[0-9a-f]{64}$/;
 
 export function clipKey(model: string, voice: string, text: string): string {
   return createHash('sha256').update(`${model}\n${voice}\n${text}`).digest('hex');
@@ -14,6 +15,7 @@ export class ClipCache {
   constructor(private dir: string) {}
 
   async get(key: string): Promise<Uint8Array | null> {
+    if (!KEY.test(key)) return null;
     const hit = this.mem.get(key);
     if (hit) return hit;
     try {
@@ -26,6 +28,7 @@ export class ClipCache {
   }
 
   async put(key: string, bytes: Uint8Array): Promise<void> {
+    if (!KEY.test(key)) return;
     this.remember(key, bytes);
     try {
       await mkdir(this.dir, { recursive: true });

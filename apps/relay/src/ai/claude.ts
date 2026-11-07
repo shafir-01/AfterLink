@@ -21,7 +21,7 @@ let cached: { key: string; client: Anthropic } | null = null;
 export function getClient(): Anthropic | null {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return null;
-  if (!cached || cached.key !== key) cached = { key, client: new Anthropic({ apiKey: key, maxRetries: 1 }) };
+  if (!cached || cached.key !== key) cached = { key, client: new Anthropic({ apiKey: key, maxRetries: 1, timeout: 60_000 }) };
   return cached.client;
 }
 
@@ -94,19 +94,19 @@ export function post<T>(
   app: Hono,
   ctx: AiContext,
   path: string,
-  run: (client: Anthropic, body: T) => Promise<{ status?: 200 | 422; body: Record<string, unknown> }>,
+  run: (client: Anthropic, body: T, charge: () => boolean) => Promise<{ status?: 200 | 422; body: Record<string, unknown> }>,
   parse: (raw: unknown) => T | string,
 ): void {
   app.post(path, async (c: Context) => {
+    const raw = await c.req.json().catch(() => undefined);
+    const parsed = parse(raw);
+    if (typeof parsed === 'string') return c.json({ error: parsed }, 400);
     const blocked = refusal(ctx);
     if (blocked) return c.json(blocked.status === 503 ? { live: false, error: blocked.reason } : { error: blocked.reason }, blocked.status);
     const client = getClient();
     if (!client) return c.json({ live: false, error: 'AI service is not configured' }, 503);
-    const raw = await c.req.json().catch(() => undefined);
-    const parsed = parse(raw);
-    if (typeof parsed === 'string') return c.json({ error: parsed }, 400);
     try {
-      const out = await run(client, parsed);
+      const out = await run(client, parsed, () => refusal(ctx) === null);
       return c.json({ live: true, ...out.body }, out.status ?? 200);
     } catch (e) {
       if (e instanceof ModelError) return c.json({ live: true, error: e.message }, e.status);
