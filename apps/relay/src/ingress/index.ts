@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Context, Hono } from 'hono';
 import { IngressService, ingressBody, type IngressTransport } from './service.ts';
 
@@ -17,9 +17,8 @@ const secretFrom = (env: IngressContext['env']) => env.AFTERLINK_INGRESS_SECRET 
 
 function secretOk(c: Context, secret: string | undefined): boolean {
   if (!secret) return false;
-  const given = Buffer.from(c.req.header(SECRET_HEADER) ?? '');
-  const want = Buffer.from(secret);
-  return given.length === want.length && timingSafeEqual(given, want);
+  const digest = (v: string) => createHash('sha256').update(v).digest();
+  return timingSafeEqual(digest(c.req.header(SECRET_HEADER) ?? ''), digest(secret));
 }
 
 export function debriefTarget(env: IngressContext['env']): string | null {
@@ -49,7 +48,7 @@ export function register(app: Hono, ctx: IngressContext): IngressService {
     }
     const parsed = ingressBody.safeParse(json);
     if (!parsed.success) {
-      return c.json({ error: 'invalid request', issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) }, 400);
+      return c.json({ error: 'invalid request', issues: parsed.error.issues.slice(0, 10).map((i) => `${i.path.join('.')}: ${i.message}`) }, 400);
     }
     const result = service.accept(parsed.data);
     if ('full' in result) return c.json({ error: 'ingress queue is full' }, 503);
@@ -78,6 +77,7 @@ export function register(app: Hono, ctx: IngressContext): IngressService {
         headers: { 'content-type': 'application/json', [SECRET_HEADER]: secretFrom(env) ?? '' },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(10000),
+        redirect: 'error',
       });
       const text = await res.text();
       let body: object = {};
@@ -87,9 +87,9 @@ export function register(app: Hono, ctx: IngressContext): IngressService {
         body = { raw: text.slice(0, 200) };
       }
       if (!res.ok) return c.json({ published: false, status: res.status, error: 'n8n rejected the report' }, 502);
-      return c.json({ published: true, ...body });
-    } catch (e) {
-      return c.json({ published: false, error: `n8n unreachable: ${(e as Error).message}` }, 502);
+      return c.json({ ...body, published: true });
+    } catch {
+      return c.json({ published: false, error: 'n8n unreachable' }, 502);
     }
   });
 

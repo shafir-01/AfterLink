@@ -45,6 +45,7 @@ export interface IngressServiceOptions {
   transport: IngressTransport;
   objective?: string;
   maxQueue?: number;
+  maxEntries?: number;
   now?: () => number;
 }
 
@@ -72,11 +73,13 @@ export class IngressService {
   private pending: string[] = [];
   private readonly objective: string;
   private readonly maxQueue: number;
+  private readonly maxEntries: number;
   private readonly now: () => number;
 
   constructor(private o: IngressServiceOptions) {
     this.objective = o.objective || 'assist';
     this.maxQueue = o.maxQueue ?? 1000;
+    this.maxEntries = o.maxEntries ?? 5000;
     this.now = o.now ?? Date.now;
     o.transport.onDeviceReady?.(() => this.flush());
   }
@@ -89,6 +92,8 @@ export class IngressService {
       return { entry: existing, duplicate: true };
     }
     if (this.pending.length >= this.maxQueue) return { full: true };
+    if (this.entries.size >= this.maxEntries) this.evictDelivered();
+    if (this.entries.size >= this.maxEntries) return { full: true };
     const spec = toSpec(body, this.objective);
     const entry: IngressEntry = {
       sourceId: body.sourceId,
@@ -126,6 +131,17 @@ export class IngressService {
 
   queued(): number {
     return this.pending.length;
+  }
+
+  /** Drops the oldest delivered entries so the dedupe table stays bounded. Queued entries are never dropped. */
+  private evictDelivered() {
+    const drop = Math.ceil(this.maxEntries / 10);
+    let n = 0;
+    for (const [id, e] of this.entries) {
+      if (e.state !== 'delivered') continue;
+      this.entries.delete(id);
+      if (++n >= drop) break;
+    }
   }
 
   private markDelivered(entry: IngressEntry) {
