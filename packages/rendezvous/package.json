@@ -1,0 +1,15 @@
+{
+  "name": "@afterlink/rendezvous",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@afterlink/ferry": "*",
+    "@afterlink/mesh": "*",
+    "@afterlink/protocol": "*"
+  }
+}
