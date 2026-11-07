@@ -311,6 +311,7 @@ export interface FerryFrame {
   i: number;
   n: number;
   data: string; // base64url slice of a deflated packet
+  c?: string; // per-frame checksum
 }
 
 // ---------- Derived state ----------
@@ -350,7 +351,7 @@ export interface ConflictRecord {
   id: string;
   /** clean: merged automatically. policy: resolved by a rule. violation: invariant broken. */
   severity: 'policy' | 'violation';
-  kind: 'duplicate-effort' | 'double-claim' | 'token-fork' | 'stale-decision' | 'forged-event';
+  kind: 'duplicate-effort' | 'double-claim' | 'token-fork' | 'stale-decision' | 'forged-event' | 'unauthorised-action';
   taskId?: TaskId;
   tokenId?: TokenId;
   events: EventId[];
@@ -405,6 +406,7 @@ export interface TimelineEntry {
   label: string;
   /** True when no central observer saw this at the time. */
   hiddenFromHq: boolean;
+  taskId?: TaskId;
 }
 
 // ---------- Helper ----------
