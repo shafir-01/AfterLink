@@ -4,11 +4,12 @@ import type { ProvisionBundle } from '@afterlink/protocol';
 import './field.css';
 import { VoiceBar } from '../voice';
 import { loadStoredBundle } from '../device/provisionLink';
+import { Sheet } from './Sheet';
 import { ReconnectSheet } from './reconnect';
 import { CarrySheet, ReportSheet, ScanSheet, TransfersSheet, WhySheet } from './sheets';
 import { announce, clock, connection, focus, lastHeard, nextStep, rights } from './derive';
 
-type SheetName = 'why' | 'carry' | 'scan' | 'report' | 'transfers' | 'reconnect' | null;
+type SheetName = 'why' | 'carry' | 'scan' | 'report' | 'transfers' | 'reconnect' | 'more' | null;
 
 function useView(node: ActorNode): ActorView {
   const cache = useRef<ActorView>(node.view());
@@ -75,8 +76,8 @@ export function Field({ actor, compact = false, bundle }: { actor: ActorNode; co
           <span className="f-dot" aria-hidden="true" />
           {conn}
         </p>
+        {conn !== 'Connected' && heard && <p className="f-heard">Last heard {clock(heard)}</p>}
       </header>
-      {conn !== 'Connected' && heard && <p className="f-heard">Last heard {clock(heard)}</p>}
 
       <main className="f-main">
         {task ? (
@@ -93,22 +94,23 @@ export function Field({ actor, compact = false, bundle }: { actor: ActorNode; co
           </>
         ) : (
           <>
-            <h2 className="f-title f-idle">Nothing to do</h2>
+            <h2 className="f-title f-idle">Standing by</h2>
           </>
+        )}
+
+        {held.length > 0 && (
+          <ul className="f-rights" aria-label="Rights you hold">
+            {held.map((r) => (
+              <li key={r.resource + r.passing} className={r.passing ? 'passing' : ''}>
+                {r.label.charAt(0).toUpperCase() + r.label.slice(1)}{r.count > 1 ? ` ×${r.count}` : ''}{r.passing ? ' (passing on)' : ''}
+              </li>
+            ))}
+          </ul>
         )}
       </main>
 
-      {held.length > 0 && (
-        <ul className="f-rights" aria-label="Rights you hold">
-          {held.map((r) => (
-            <li key={r.resource + r.passing} className={r.passing ? 'passing' : ''}>
-              {r.label.charAt(0).toUpperCase() + r.label.slice(1)}{r.count > 1 ? ` ×${r.count}` : ''}{r.passing ? ' (passing on)' : ''}
-            </li>
-          ))}
-        </ul>
-      )}
 
-      {task && <VoiceBar key={task.spec.id} task={task} actor={actor} />}
+      {task && !compact && <VoiceBar key={task.spec.id} task={task} actor={actor} />}
 
       <div className="f-actions">
         {primary && (
@@ -127,7 +129,12 @@ export function Field({ actor, compact = false, bundle }: { actor: ActorNode; co
         )}
       </div>
 
-      <nav className="f-menu" aria-label="More">
+      {compact ? (
+        <button className="f-more-btn" onClick={() => setSheet('more')}>
+          More{transfers ? <span className="f-badge" aria-label={`${transfers} waiting`}>{transfers}</span> : null}
+        </button>
+      ) : (
+        <nav className="f-menu" aria-label="More">
         <button onClick={() => setSheet('why')} disabled={!task && !view.lastDecision}>Why this?</button>
         <button onClick={() => setSheet('carry')}>Carry update</button>
         <button onClick={() => setSheet('scan')}>Scan update</button>
@@ -136,7 +143,24 @@ export function Field({ actor, compact = false, bundle }: { actor: ActorNode; co
         <button onClick={() => setSheet('transfers')} className={transfers ? 'alert' : ''}>
           Transfers{transfers ? <span className="f-badge" aria-label={`${transfers} waiting`}>{transfers}</span> : null}
         </button>
-      </nav>
+        </nav>
+      )}
+
+      {sheet === 'more' && (
+        <Sheet title="More" onClose={() => setSheet(null)}>
+          {task && <VoiceBar key={task.spec.id} task={task} actor={actor} />}
+          <nav className="f-menu f-menu-list" aria-label="More">
+        <button onClick={() => setSheet('why')} disabled={!task && !view.lastDecision}>Why this?</button>
+        <button onClick={() => setSheet('carry')}>Carry update</button>
+        <button onClick={() => setSheet('scan')}>Scan update</button>
+        {keys && <button onClick={() => setSheet('reconnect')}>Reconnect by QR</button>}
+        <button onClick={() => setSheet('report')}>Report a problem</button>
+        <button onClick={() => setSheet('transfers')} className={transfers ? 'alert' : ''}>
+          Transfers{transfers ? <span className="f-badge" aria-label={`${transfers} waiting`}>{transfers}</span> : null}
+        </button>
+          </nav>
+        </Sheet>
+      )}
 
       {sheet === 'why' && <WhySheet view={view} onClose={() => setSheet(null)} />}
       {sheet === 'carry' && <CarrySheet node={actor} onClose={() => setSheet(null)} />}

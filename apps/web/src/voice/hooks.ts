@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MissionCapsule, TaskRecord, TaskSpec } from '@afterlink/protocol';
+import { insideStage } from '../bridge/device.ts';
 import { getVoicePack, type PackProgress, type SpeakSource, type VoicePack } from './pack.ts';
 import { taskBriefText } from './phrases.ts';
 
@@ -80,7 +81,7 @@ export function useVoicePack(capsule: MissionCapsule | null, team: string, onlin
   const [progress, setProgress] = useState<PackProgress | null>(null);
   const ran = useRef('');
   useEffect(() => {
-    if (!capsule || !online) return;
+    if (!capsule || !online || insideStage()) return;
     const id = `${capsule.id}:${capsule.version}:${team}`;
     if (ran.current === id) return;
     ran.current = id;

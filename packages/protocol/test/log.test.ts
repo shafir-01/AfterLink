@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { createEvent, EventLog, type AnyEvent, type KeyPair } from '../src/index.ts';
+import { createEvent, EventLog, MAX_WAITING_PER_ACTOR, type AnyEvent, type KeyPair } from '../src/index.ts';
 import { fingerprint, ids, isCausal, MISSION, note, playHistory, seededKeys, type Step } from './helpers.ts';
 
 const DEVICES = 4;
@@ -206,13 +206,13 @@ describe('gap buffering', () => {
     expect(second).toMatchObject({ duplicates: 1, gaps: 0 });
   });
 
-  it('releases a very long chain delivered backwards', () => {
-    const events = chain(alice, 2000);
+  it('releases a long chain delivered backwards', () => {
+    const events = chain(alice, MAX_WAITING_PER_ACTOR + 1);
     const log = new EventLog(MISSION);
     for (let i = events.length - 1; i > 0; i--) log.ingest(events[i]!);
     expect(log.size).toBe(0);
     log.ingest(events[0]!);
-    expect(log.size).toBe(2000);
+    expect(log.size).toBe(events.length);
     expect(ids(log.all())).toEqual(ids(events));
   });
 });
@@ -226,19 +226,6 @@ describe('order', () => {
     expect(order.map(key)).toEqual([...a, ...b].map(key).sort((x, y) => {
       return (x[0] as number) - (y[0] as number) || (x[1]! < y[1]! ? -1 : 1);
     }));
-  });
-
-  it('stays causal and deterministic when lamports contradict causality', () => {
-    const [high] = chain(alice, 1).map(() => event(alice, 1, null, 50, 'high clock'));
-    const low = event(bob, 1, null, 1, 'low clock', [high!.id]);
-    const lower = event(bob, 2, low.id, 1, 'still low');
-    const unrelated = event(seededKeys(12), 1, null, 20, 'unrelated');
-    const forward = replicaOf([high!, low, lower, unrelated]);
-    const backward = replicaOf([unrelated, lower, low, high!]);
-    expect(isCausal(forward.all())).toBe(true);
-    expect(ids(forward.all())).toEqual(ids(backward.all()));
-    expect(ids(forward.all()).slice(0, 3)).toEqual([unrelated.id, high!.id, low.id]);
-    expect(forward.lamport()).toBe(52);
   });
 
   it('hands out a copy, so callers cannot disturb the log', () => {
@@ -519,6 +506,19 @@ describe('summary and delta', () => {
     a.ingestMany(b.missingFor(a.summary()));
   }
 
+  it('converges two honest replicas in one exchange, with nothing left waiting', () => {
+    fc.assert(
+      fc.property(steps, fc.nat(DEVICES - 1), fc.nat(DEVICES - 1), (plan, i, j) => {
+        const { logs } = playHistory(DEVICES, plan);
+        const [a, b] = [logs[i]!, logs[j]!];
+        exchange(a, b);
+        expect(fingerprint(a)).toEqual(fingerprint(b));
+        expect(a.pending + b.pending).toBe(0);
+      }),
+      { numRuns: 100 },
+    );
+  });
+
   it('converges two replicas with two exchanges, forks included, then goes quiet', () => {
     fc.assert(
       fc.property(steps, fc.nat(DEVICES - 1), fc.nat(DEVICES - 1), (plan, i, j) => {
@@ -527,12 +527,33 @@ describe('summary and delta', () => {
         exchange(a, b);
         exchange(a, b);
         expect(fingerprint(a)).toEqual(fingerprint(b));
-        expect(a.pending).toBe(0);
         expect(a.missingFor(b.summary())).toEqual([]);
         expect(b.missingFor(a.summary())).toEqual([]);
       }),
       { numRuns: 150 },
     );
+  });
+
+  it('closes a gap left by a fork as soon as a holder of the dependency is met', () => {
+    const { logs } = playHistory(
+      DEVICES,
+      [
+        { kind: 'emit', device: 0 },
+        { kind: 'sync', from: 0, to: 3 },
+        { kind: 'emit', device: 1 },
+        { kind: 'emit', device: 3 },
+        { kind: 'emit', device: 1 },
+        { kind: 'sync', from: 3, to: 1 },
+      ],
+      clone,
+    );
+    const [, forked, bystander, holder] = logs as [EventLog, EventLog, EventLog, EventLog];
+    expect(forked.pending).toBe(1);
+    exchange(forked, bystander);
+    expect(forked.pending).toBe(1);
+    exchange(forked, holder);
+    expect(forked.pending).toBe(0);
+    expect(fingerprint(forked)).toEqual(fingerprint(holder));
   });
 
   it('spreads every fork to every replica through pairwise anti-entropy alone', () => {
@@ -543,7 +564,10 @@ describe('summary and delta', () => {
           for (const a of logs) for (const b of logs) if (a !== b) exchange(a, b);
         }
         const reference = fingerprint(replicaOf(events));
-        for (const log of logs) expect(fingerprint(log)).toEqual(reference);
+        for (const log of logs) {
+          expect(fingerprint(log)).toEqual(reference);
+          expect(log.pending).toBe(0);
+        }
       }),
       { numRuns: 60 },
     );

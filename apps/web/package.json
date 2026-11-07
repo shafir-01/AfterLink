@@ -15,6 +15,7 @@
     "@afterlink/mesh": "*",
     "@afterlink/mission": "*",
     "@afterlink/planner": "*",
+    "@afterlink/proof": "^0.1.0",
     "@afterlink/protocol": "*",
     "@afterlink/reconcile": "*",
     "motion": "^12.0.0",

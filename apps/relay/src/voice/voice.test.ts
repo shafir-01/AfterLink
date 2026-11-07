@@ -50,8 +50,8 @@ describe('voice brief', () => {
     expect(r1.status).toBe(200);
     expect(r1.headers.get('x-voice-source')).toBe('live');
     expect(new Uint8Array(await r1.arrayBuffer())).toEqual(mp3);
-    expect(calls[0].url).toContain(`/text-to-speech/${voiceFor('medics').id}`);
-    expect(JSON.parse(calls[0].init.body as string).model_id).toBe('eleven_flash_v2_5');
+    expect(calls[0]!.url).toContain(`/text-to-speech/${voiceFor('medics').id}`);
+    expect(JSON.parse(calls[0]!.init.body as string).model_id).toBe('eleven_flash_v2_5');
     const r2 = await post(a, '/api/voice/brief', { text: 'Task accepted', role: 'medics' });
     expect(r2.headers.get('x-voice-source')).toBe('cache');
     expect(calls.length).toBe(1);
@@ -78,8 +78,8 @@ describe('voice transcribe', () => {
     const r = await app().request('/api/voice/transcribe', { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: new Uint8Array([1, 2, 3]) });
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ live: true, text: 'accept the task' });
-    expect(calls[0].url).toBe('https://api.elevenlabs.io/v1/speech-to-text');
-    expect((calls[0].init.body as FormData).get('model_id')).toBe('scribe_v2');
+    expect(calls[0]!.url).toBe('https://api.elevenlabs.io/v1/speech-to-text');
+    expect((calls[0]!.init.body as FormData).get('model_id')).toBe('scribe_v2');
   });
 
   it('400 without audio, 503 without key', async () => {

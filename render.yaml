@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: frankfurt
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run start -w @afterlink/relay
     healthCheckPath: /health
     autoDeploy: true
@@ -13,13 +13,17 @@ services:
         value: "22"
       - key: AFTERLINK_WEB_DIST
         value: apps/web/dist
+      - key: AFTERLINK_WEB_ORIGIN
+        value: https://shafir-01.github.io
+      - key: VITE_SITE_URL
+        value: https://afterlink.onrender.com/
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ELEVENLABS_API_KEY
         sync: false
-      - key: N8N_BASE_URL
+      - key: N8N_WEBHOOK_URL
         sync: false
-      - key: N8N_API_KEY
+      - key: N8N_INGRESS_SECRET
         sync: false
       - key: AFTERLINK_ADMIN_TOKEN
         generateValue: true

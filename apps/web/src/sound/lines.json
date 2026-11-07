@@ -1,0 +1,20 @@
+[
+  { "id": "hq-down", "team": "system", "text": "Command post offline. Teams keep going." },
+  { "id": "medics-network", "team": "medics", "text": "Medics. Network's gone. Carrying on." },
+  { "id": "access-network", "team": "access", "text": "Access. Link lost. Working from what we know." },
+  { "id": "facilities-network", "team": "facilities", "text": "Facilities. No signal. We keep working." },
+  { "id": "supply-network", "team": "supply", "text": "Supply. Network's down. Using our own list." },
+  { "id": "medics-split", "team": "medics", "text": "Medics. Only Access in range now." },
+  { "id": "supply-split", "team": "supply", "text": "Supply. Lost contact with Access and Medics." },
+  { "id": "access-holding", "team": "access", "text": "Access. We can't reach Supply. Holding the chair." },
+  { "id": "facilities-refuse", "team": "facilities", "text": "Facilities. The chair isn't ours to promise. Declined." },
+  { "id": "medics-refuse", "team": "medics", "text": "Medics. Refused. The chair is already spoken for." },
+  { "id": "supply-courier", "team": "supply", "text": "Supply. Courier's on the way with the update." },
+  { "id": "access-scan", "team": "access", "text": "Access. Courier's here. Scanning the update." },
+  { "id": "supply-received", "team": "supply", "text": "Supply. Update received, rerouting via west gate." },
+  { "id": "facilities-restore", "team": "facilities", "text": "Facilities. Signal's back. Syncing now." },
+  { "id": "medics-restore", "team": "medics", "text": "Medics. Link restored. Sharing our log." },
+  { "id": "medics-done", "team": "medics", "text": "Medics. First aid done at the north gate." },
+  { "id": "facilities-done", "team": "facilities", "text": "Facilities. Path cleared." },
+  { "id": "all-back", "team": "system", "text": "All teams back in contact." }
+]

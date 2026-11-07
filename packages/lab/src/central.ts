@@ -12,6 +12,9 @@ type Msg =
   | { t: 'assign'; id: string; task: TaskId; spec: TaskSpec; tokens: TokenId[] }
   | { t: 'ack'; id: string };
 
+/** Unacknowledged messages go out again this often. */
+const RETRY_MS = 500;
+
 interface HubTask {
   spec: TaskSpec;
   status: 'open' | 'assigned' | 'done';
@@ -47,6 +50,7 @@ export class CentralSystem implements SystemUnderTest {
   private pendingAssign = new Map<string, { to: number; msg: Msg }>();
   private attacks: AttackResult[] = [];
   private hubDown = false;
+  private ferry: { first: number; second: number } | null = null;
 
   constructor(private ctx: RunContext) {
     this.scenario = ctx.scenario;
@@ -59,6 +63,7 @@ export class CentralSystem implements SystemUnderTest {
     this.net.on(HUB, (from, msg) => this.onHub(from, msg as Msg));
     const { sim } = this.ctx;
     sim.every(TIMING.tickMs, () => this.hubTick());
+    sim.every(RETRY_MS, () => this.resend());
     for (const c of this.clients) {
       c.start();
       this.lastHeard.set(c.index, 0);
@@ -88,14 +93,18 @@ export class CentralSystem implements SystemUnderTest {
         this.clients[step.actor]?.observe(step.key, step.value, step.validForMs);
         break;
       case 'ferry':
-        this.clients[step.from]?.carryTo(this.clients[step.to] as Client);
+        for (let i = 0; i < step.copies; i++) {
+          const added = (this.clients[step.from] as Client).carryTo(this.clients[step.to] as Client);
+          if (i === 0) this.ferry = { first: added, second: 0 };
+          else if (this.ferry) this.ferry.second += added;
+        }
         break;
       case 'transfer':
         break;
       case 'attack':
         this.attacks.push({
           attack: step.attack,
-          outcome: step.attack === 'forged-packet' || step.attack === 'replayed-packet' || step.attack === 'insider-fork' ? 'not-applicable' : 'rejected',
+          outcome: step.attack === 'forged-packet' || step.attack === 'replayed-packet' || step.attack === 'insider-fork' ? 'not-applicable' : 'assumed',
         });
         break;
     }
@@ -103,6 +112,10 @@ export class CentralSystem implements SystemUnderTest {
 
   bytes(): number {
     return this.net.sentBytes;
+  }
+
+  observerBytes(): number {
+    return 0;
   }
 
   isConverged(): boolean {
@@ -118,10 +131,10 @@ export class CentralSystem implements SystemUnderTest {
     const finished = new Set(this.clients.flatMap((c) => c.finished));
     report.lostCompletions = [...finished].filter((id) => this.tasks.get(id)?.status !== 'done').length;
     report.attacks = this.attacks;
-    const carried = this.clients.reduce<number | null>((sum, c) => (c.carried === null ? sum : (sum ?? 0) + c.carried), null);
-    report.ferryNewFirst = carried;
-    report.ferryNewSecond = carried === null ? null : 0;
-    report.restartDefects = this.scenario.faults.some((f) => f.kind === 'restart') ? 0 : null;
+    if (this.ferry) {
+      report.ferryNewFirst = this.ferry.first;
+      report.ferryNewSecond = this.ferry.second;
+    }
     return report;
   }
 
@@ -154,9 +167,13 @@ export class CentralSystem implements SystemUnderTest {
     this.dispatch();
   }
 
-  private hubTick(): void {
+  private resend(): void {
     if (this.hubDown) return;
     for (const { to, msg } of this.pendingAssign.values()) this.net.send(HUB, to, msg);
+  }
+
+  private hubTick(): void {
+    if (this.hubDown) return;
     this.reassignSilentOwners();
     this.dispatch();
   }
@@ -253,7 +270,6 @@ export class CentralSystem implements SystemUnderTest {
 class Client {
   load = 0;
   finished: TaskId[] = [];
-  carried: number | null = null;
   private outbox = new Map<string, Msg>();
   private seen = new Set<string>();
   private worker: FieldWorker;
@@ -284,7 +300,9 @@ class Client {
 
   start(): void {
     this.net.on(this.index, (_from, msg) => this.onMessage(msg as Msg));
-    this.ctx.sim.every(TIMING.tickMs, () => this.tick(), this.ctx.rng.fork(`phase${this.index}`).int(1, TIMING.tickMs));
+    const phase = this.ctx.rng.fork(`phase${this.index}`);
+    this.ctx.sim.every(TIMING.tickMs, () => this.heartbeat(), phase.int(1, TIMING.tickMs));
+    this.ctx.sim.every(RETRY_MS, () => this.retry(), phase.int(1, RETRY_MS));
   }
 
   report(spec: TaskSpec): void {
@@ -296,14 +314,14 @@ class Client {
   }
 
   /** A volunteer walks this device's unsent reports to another device, which forwards them if it can reach the hub. */
-  carryTo(other: Client): void {
+  carryTo(other: Client): number {
     let added = 0;
     for (const [id, msg] of this.outbox) {
       if (other.outbox.has(id)) continue;
       other.outbox.set(id, msg);
       added++;
     }
-    other.carried = (other.carried ?? 0) + added;
+    return added;
   }
 
   restart(downForMs: number): void {
@@ -325,9 +343,12 @@ class Client {
     this.net.send(this.index, HUB, msg);
   }
 
-  private tick(): void {
+  private heartbeat(): void {
+    if (!this.off) this.net.send(this.index, HUB, { t: 'hb' } satisfies Msg);
+  }
+
+  private retry(): void {
     if (this.off) return;
-    this.net.send(this.index, HUB, { t: 'hb' } satisfies Msg);
     for (const msg of this.outbox.values()) this.net.send(this.index, HUB, msg);
   }
 

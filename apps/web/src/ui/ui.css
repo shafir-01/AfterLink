@@ -83,6 +83,9 @@
   -webkit-tap-highlight-color: transparent;
   transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
+.al-button:any-link {
+  text-decoration: none;
+}
 .al-button--large {
   min-height: 3.5rem;
   padding: 0 var(--space-6);
@@ -174,7 +177,7 @@
 }
 .al-sheet__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
 }
@@ -190,12 +193,40 @@
   }
 }
 
+.al-skip {
+  position: fixed;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 10;
+  min-height: var(--tap);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font-size: var(--text-label);
+  font-weight: 600;
+  cursor: pointer;
+  transform: translateY(-200%);
+}
+.al-skip:focus-visible {
+  transform: none;
+}
+
 .al-center {
   display: grid;
   place-items: center;
   min-height: 100dvh;
   padding: var(--space-5);
   text-align: center;
+}
+.al-loading {
+  animation: al-loading-in var(--dur-base) var(--ease-out) 400ms both;
+}
+@keyframes al-loading-in {
+  from {
+    opacity: 0;
+  }
 }
 .al-visually-hidden {
   position: absolute;

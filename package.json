@@ -11,7 +11,7 @@
     "dev": "npm run dev -w @afterlink/web",
     "relay": "npm run dev -w @afterlink/relay",
     "build": "npm run build -w @afterlink/web",
-    "typecheck": "tsc -b --noEmit false 2>/dev/null || tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "lab": "tsx packages/lab/src/cli.ts"
   },

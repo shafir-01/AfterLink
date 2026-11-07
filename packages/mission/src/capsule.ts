@@ -249,7 +249,8 @@ export function validateCapsule(c: unknown): { ok: true; capsule: MissionCapsule
   checkUnique(resources.map((r) => r.id), 'capsule.resources', 'resource', errors);
   checkUnique(tokenIds, 'capsule.resources tokens', 'token', errors);
 
-  const rawTasks = c.tasks === undefined ? [] : Array.isArray(c.tasks) ? c.tasks : (errors.push('capsule.tasks: must be a list'), []);
+  const rawTasks: unknown[] = Array.isArray(c.tasks) ? c.tasks : [];
+  if (c.tasks !== undefined && !Array.isArray(c.tasks)) errors.push('capsule.tasks: must be a list');
   const taskErrors = rawTasks.map((t, i) => validateTaskSpec(t, `capsule.tasks[${i}]`));
   taskErrors.forEach((e) => errors.push(...e));
 
@@ -307,8 +308,9 @@ export function validateCapsule(c: unknown): { ok: true; capsule: MissionCapsule
   const allTaskIds = new Set(allTasks.map((t) => t.id));
   const objectiveIds = new Set(objectives.map((o) => o.id as string));
 
-  checkUnique(rawTasks.map((t: unknown) => (isRec(t) ? t.id : undefined)), 'capsule.tasks', 'task', errors);
-  const capsuleTaskIds = new Set(rawTasks.map((t: unknown) => (isRec(t) ? t.id : undefined)));
+  const rawIds = rawTasks.map((t) => (isRec(t) ? t.id : undefined));
+  checkUnique(rawIds, 'capsule.tasks', 'task', errors);
+  const capsuleTaskIds = new Set(rawIds);
   const seenSpawn = new Set<unknown>();
   for (const s of spawned) {
     const id = isRec(s.spec) ? s.spec.id : undefined;
@@ -353,24 +355,40 @@ export function custodiansOf(roster: Roster): Record<TeamId, ActorId> {
   return custodians;
 }
 
-/** Offline check of a whole roster: every credential is genuine and each team has exactly one custodian. */
-export function verifyRoster(roster: Roster, capsule: MissionCapsule): { ok: true } | { ok: false; reason: string } {
-  const actors = new Set<ActorId>();
-  const custodianCount = new Map<TeamId, number>();
+function rosterProblem(roster: Roster, capsule: MissionCapsule): string | null {
   const teams = new Set(capsule.teams.map((t) => t.id));
   for (const r of roster) {
-    if (actors.has(r.actor)) return { ok: false, reason: `actor ${r.actor} is listed twice` };
-    actors.add(r.actor);
-    if (!teams.has(r.team)) return { ok: false, reason: `unknown team ${r.team}` };
+    if (!teams.has(r.team)) return `unknown team ${r.team}`;
     const c = r.credential;
-    if (c.actor !== r.actor || c.team !== r.team || c.custodian !== r.custodian || c.mission !== capsule.id) {
-      return { ok: false, reason: `credential for ${r.name} does not match the roster` };
+    if (c?.actor !== r.actor || c.team !== r.team || c.custodian !== r.custodian || c.mission !== capsule.id) {
+      return `credential for ${r.name} does not match the roster`;
     }
-    if (!verifyCredential(c, capsule.issuer)) return { ok: false, reason: `credential for ${r.name} is not signed by the issuer` };
-    if (r.custodian) custodianCount.set(r.team, (custodianCount.get(r.team) ?? 0) + 1);
+    if (!verifyCredential(c, capsule.issuer)) return `credential for ${r.name} is not signed by the issuer`;
   }
+  return null;
+}
+
+/** Every entry chains to the issuer. A replica that has not heard from everyone yet may hold only part of the roster. */
+export function rosterIsGenuine(roster: Roster, capsule: MissionCapsule): boolean {
+  if (roster.length === 0 || rosterProblem(roster, capsule) !== null) return false;
+  const custodians = new Map<TeamId, ActorId>();
+  for (const r of roster) {
+    if (!r.custodian) continue;
+    const seen = custodians.get(r.team);
+    if (seen !== undefined && seen !== r.actor) return false;
+    custodians.set(r.team, r.actor);
+  }
+  return true;
+}
+
+/** Offline check of a complete roster: every credential is genuine and each team has exactly one custodian. */
+export function verifyRoster(roster: Roster, capsule: MissionCapsule): { ok: true } | { ok: false; reason: string } {
+  const problem = rosterProblem(roster, capsule);
+  if (problem !== null) return { ok: false, reason: problem };
+  const actors = new Set(roster.map((r) => r.actor));
+  if (actors.size !== roster.length) return { ok: false, reason: 'an actor is listed twice' };
   for (const t of capsule.teams) {
-    const n = custodianCount.get(t.id) ?? 0;
+    const n = roster.filter((r) => r.team === t.id && r.custodian).length;
     if (n !== 1) return { ok: false, reason: `team ${t.id} has ${n} custodians` };
   }
   return { ok: true };

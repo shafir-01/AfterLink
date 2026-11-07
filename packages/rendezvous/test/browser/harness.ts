@@ -74,7 +74,7 @@ const rv = {
       connectMs: o.connectMs,
       createConnection: o.unreachable ? unreachable : undefined,
     };
-    mesh = new Mesh({ self: o.keys.publicKey, peers: o.roster, connector: webrtcConnector() });
+    mesh = new Mesh({ self: o.keys.publicKey, secretKey: o.keys.secretKey, peers: o.roster, connector: webrtcConnector() });
     sync = attachSync(mesh, log, () => {}, { intervalMs: 500, gossipMs: 20 });
     mesh.start();
     if (o.relay) {
@@ -90,6 +90,14 @@ const rv = {
     await show(r.frames);
     return { ok: true, bytes: r.bytes, sdpBytes: r.sdpBytes, frames: r.frames.length, text: r.text };
   },
+
+  /** Grants the page what a scanner has: once capture is allowed, browsers stop hiding LAN addresses. */
+  async camera() {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    for (const track of stream.getTracks()) track.stop();
+  },
+
+  candidates: () => (pending?.session.pc.localDescription?.sdp ?? '').split(/\r?\n/).filter((l) => l.startsWith('a=candidate')),
 
   async showFrame(i: number) {
     await renderFrame(canvas(), shown[i]!);
@@ -153,7 +161,7 @@ const rv = {
   },
 
   size: () => log.size,
-  links: () => mesh.stats().map((s) => ({ peer: s.peer, state: s.state, opens: s.opens, sent: s.sent, received: s.received })),
+  links: () => mesh.stats().map((s) => ({ peer: s.peer, state: s.state, opens: s.opens, sent: s.sent, received: s.received, authenticated: s.authenticated, authFailures: s.authFailures })),
   results: () => results,
   relayed: () => relayed,
   connectedAt: () => connectedAt,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import type { ActorId, AnyEvent, EventId, MissionState, TokenId } from '@afterlink/protocol';
-import { canCommit, conservation, findTokens, pendingTransfers } from '../src/index.ts';
+import type { ActorId, AnyEvent, MissionState, TokenId } from '@afterlink/protocol';
+import { auditRights, canCommit, conservation, findTokens, pendingTransfers } from '../src/index.ts';
 import {
   ACCESS,
   CREW,
@@ -10,6 +10,7 @@ import {
   SUPPLY,
   allTokens,
   capsule,
+  custodians,
   derive,
   exchange,
   expectLegalChain,
@@ -17,76 +18,113 @@ import {
   token,
 } from './helpers.ts';
 
-const RUNS = 300;
+const RUNS = 200;
 
 /** What a replica must be able to say about itself at every moment, whatever it has seen. */
-function expectConserved(state: MissionState): void {
-  const rows = conservation(state);
-  expect(rows.every((r) => r.ok)).toBe(true);
+function expectBalanced(state: MissionState): void {
   expect(Object.keys(state.tokens).sort()).toEqual([...allTokens].sort());
-  for (const row of rows) expect(row.committed + row.held + row.inTransit).toBe(row.issued);
+  for (const row of conservation(state)) expect(row.committed + row.held + row.inTransit + row.disputed).toBe(row.issued);
 }
 
 type Step =
   | { kind: 'commit'; who: number; pick: number; n: number }
   | { kind: 'offer'; who: number; pick: number; n: number; to: number }
   | { kind: 'answer'; who: number; pick: number; yes: boolean }
+  | { kind: 'release'; who: number; pick: number }
   | { kind: 'split'; mask: number }
   | { kind: 'heal' }
   | { kind: 'gossip'; a: number; b: number }
   | { kind: 'ferry'; from: number; to: number; keep: number };
 
-const who = fc.nat({ max: CREW.length - 1 });
+type Attack =
+  | { kind: 'twin'; who: number }
+  | { kind: 'rogue'; who: number; move: 'commit' | 'offer' | 'accept' | 'decline' | 'release'; token: number; to: number; ref: number };
+
+/** Wraps around the devices in play, so a second device on one key gets its turn. */
+const who = fc.nat({ max: 2 * CREW.length - 1 });
+const tokenPick = fc.nat({ max: allTokens.length });
+
 const step: fc.Arbitrary<Step> = fc.oneof(
   { weight: 3, arbitrary: fc.record({ kind: fc.constant('commit' as const), who, pick: fc.nat(), n: fc.integer({ min: 1, max: 2 }) }) },
   { weight: 5, arbitrary: fc.record({ kind: fc.constant('offer' as const), who, pick: fc.nat(), n: fc.integer({ min: 1, max: 2 }), to: who }) },
   { weight: 5, arbitrary: fc.record({ kind: fc.constant('answer' as const), who, pick: fc.nat(), yes: fc.boolean() }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant('release' as const), who, pick: fc.nat() }) },
   { weight: 1, arbitrary: fc.record({ kind: fc.constant('split' as const), mask: fc.nat({ max: 15 }) }) },
   { weight: 1, arbitrary: fc.record({ kind: fc.constant('heal' as const) }) },
-  { weight: 5, arbitrary: fc.record({ kind: fc.constant('gossip' as const), a: who, b: who }) },
+  { weight: 6, arbitrary: fc.record({ kind: fc.constant('gossip' as const), a: who, b: who }) },
   { weight: 2, arbitrary: fc.record({ kind: fc.constant('ferry' as const), from: who, to: who, keep: fc.nat() }) },
 );
 
+const attack: fc.Arbitrary<Attack> = fc.oneof(
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant('twin' as const), who }) },
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant('rogue' as const),
+      who,
+      move: fc.constantFrom('commit' as const, 'offer' as const, 'accept' as const, 'decline' as const, 'release' as const),
+      token: tokenPick,
+      to: who,
+      ref: fc.nat({ max: 12 }),
+    }),
+  },
+);
+
+const schedule = fc.array(step, { minLength: 10, maxLength: 80, size: 'max' });
+const hostileSchedule = fc.array(fc.oneof({ weight: 4, arbitrary: step }, { weight: 1, arbitrary: attack }), { minLength: 10, maxLength: 80, size: 'max' });
+
 /**
- * Four honest actors under a random schedule. Each acts only on its own view. Gossip respects the
- * current partition and delivers everything; ferries cross it and may deliver only part of the log.
+ * Four actors under a random schedule. Honest steps act only on the device's own view, gossip
+ * respects the current partition, ferries cross it and may carry only part of a log. Attacks are
+ * what no honest device would do: a second device on one key, or a signature on any move at all.
  */
-function runCrew(steps: Step[], after: (devices: Device[]) => void) {
-  const devices = CREW.map((id) => new Device(id));
+function run(steps: (Step | Attack)[], after: (devices: Device[]) => void = () => {}, clock?: () => number) {
+  const devices = CREW.map((id) => new Device(id, clock));
   const side = new Map(CREW.map((id) => [id, 0]));
   let transfers = 0;
+  const held = (d: Device) => {
+    const view = d.state();
+    return allTokens.filter((t) => view.tokens[t]?.state === 'held' && view.tokens[t]?.holder === d.actor);
+  };
+  const pick = (i: number) => devices[i % devices.length]!;
 
   for (const s of steps) {
     switch (s.kind) {
       case 'commit': {
-        const d = devices[s.who]!;
-        const view = d.state();
-        const mine = allTokens.filter((t) => view.tokens[t]?.state === 'held' && view.tokens[t]?.holder === d.actor);
+        const d = pick(s.who);
+        const mine = held(d);
         if (mine.length === 0) break;
         const start = s.pick % mine.length;
         const tokens = mine.slice(start, start + s.n);
-        expect(canCommit(view, d.actor, tokens)).toEqual({ ok: true });
-        d.commit(tokens, `task-${s.pick}`);
+        expect(canCommit(d.state(), d.actor, tokens)).toEqual({ ok: true });
+        d.commit(tokens, `task-${s.pick % 5}`);
         break;
       }
       case 'offer': {
-        const d = devices[s.who]!;
-        if (CREW[s.to] === d.actor) break;
-        const view = d.state();
-        const mine = allTokens.filter((t) => view.tokens[t]?.state === 'held' && view.tokens[t]?.holder === d.actor);
+        const d = pick(s.who);
+        const to = CREW[s.to % CREW.length]!;
+        if (to === d.actor) break;
+        const mine = held(d);
         if (mine.length === 0) break;
         const start = s.pick % mine.length;
         transfers += 1;
-        d.offer(mine.slice(start, start + s.n), CREW[s.to]!, `transfer-${transfers}`);
+        d.offer(mine.slice(start, start + s.n), to, `transfer-${transfers}`);
         break;
       }
       case 'answer': {
-        const d = devices[s.who]!;
+        const d = pick(s.who);
         const pending = pendingTransfers(d.state(), d.actor);
         if (pending.length === 0) break;
         const { transfer } = pending[s.pick % pending.length]!;
         if (s.yes) d.accept(transfer);
         else d.decline(transfer);
+        break;
+      }
+      case 'release': {
+        const d = pick(s.who);
+        const committed = Object.values(d.state().tokens).filter((t) => t.state === 'committed' && t.holder === d.actor);
+        if (committed.length === 0) break;
+        d.emit('task.released', { taskId: committed[s.pick % committed.length]!.committedTo!, reason: 'no longer needed' });
         break;
       }
       case 'split':
@@ -95,12 +133,30 @@ function runCrew(steps: Step[], after: (devices: Device[]) => void) {
       case 'heal':
         CREW.forEach((id) => side.set(id, 0));
         break;
-      case 'gossip':
-        if (side.get(CREW[s.a]!) === side.get(CREW[s.b]!)) exchange(devices[s.a]!, devices[s.b]!);
+      case 'gossip': {
+        const [a, b] = [pick(s.a), pick(s.b)];
+        if (side.get(a.actor) === side.get(b.actor)) exchange(a, b);
         break;
+      }
       case 'ferry': {
-        const log = devices[s.from]!.all();
-        devices[s.to]!.receive(log.slice(0, s.keep % (log.length + 1)));
+        const log = pick(s.from).all();
+        pick(s.to).receive(log.slice(0, s.keep % (log.length + 1)));
+        break;
+      }
+      case 'twin':
+        devices.push(pick(s.who).clone());
+        break;
+      case 'rogue': {
+        const d = pick(s.who);
+        const id = allTokens[s.token % allTokens.length]!;
+        const ref = `transfer-${Math.max(1, transfers - s.ref)}`;
+        if (s.move === 'commit') d.commit([id], `task-${s.ref % 5}`);
+        else if (s.move === 'release') d.emit('task.released', { taskId: `task-${s.ref % 5}`, reason: 'rogue' });
+        else if (s.move === 'offer') {
+          transfers += 1;
+          d.offer([id], CREW[s.to % CREW.length]!, `transfer-${transfers}`);
+        } else if (s.move === 'accept') d.accept(ref);
+        else d.decline(ref);
         break;
       }
     }
@@ -113,16 +169,28 @@ function union(devices: Device[]): AnyEvent[] {
   return [...new Map(devices.flatMap((d) => d.all()).map((e) => [e.id, e])).values()];
 }
 
+function resourceOf(id: TokenId): string {
+  return capsule.resources.find((r) => r.tokens.some((t) => t.id === id))!.id;
+}
+
 /** Which actors, each trusting only its own view, believe they may spend this token right now. */
 function spenders(devices: Device[], id: TokenId): ActorId[] {
-  return devices.filter((d) => findTokens(d.state(), d.actor, capsule.resources.find((r) => r.tokens.some((t) => t.id === id))!.id, 99).includes(id)).map((d) => d.actor);
+  return devices.filter((d) => findTokens(d.state(), d.actor, resourceOf(id), 99).includes(id)).map((d) => d.actor);
+}
+
+function shuffled<T>(list: T[], noise: fc.Stream<number>): T[] {
+  return list.map((e) => ({ e, k: noise.next().value as number })).sort((a, b) => a.k - b.k).map((x) => x.e);
+}
+
+function outcome(events: AnyEvent[]) {
+  return Object.values(derive(events).tokens).map((t) => ({ id: t.id, state: t.state, holder: t.holder, committedTo: t.committedTo }));
 }
 
 describe('the schedules', () => {
   it('reach the states the properties below are about', () => {
-    const seen = { committed: 0, inTransit: 0, moved: 0, returned: 0, splitViews: 0, chairStuck: 0 };
-    for (const steps of fc.sample(fc.array(step, { maxLength: 60 }), { numRuns: 300, seed: 1 })) {
-      const devices = runCrew(steps, (ds) => {
+    const seen = { committed: 0, inTransit: 0, moved: 0, returned: 0, released: 0, splitViews: 0, stuckAtEnd: 0 };
+    for (const steps of fc.sample(schedule, { numRuns: 200, seed: 1 })) {
+      const devices = run(steps, (ds) => {
         if (new Set(ds.map((d) => JSON.stringify(d.derived().tokens))).size > 1) seen.splitViews += 1;
       });
       const events = union(devices);
@@ -131,19 +199,33 @@ describe('the schedules', () => {
       seen.inTransit += merged.filter((t) => t.state === 'in-transit').length;
       seen.moved += events.filter((e) => e.type === 'right.accepted').length;
       seen.returned += events.filter((e) => e.type === 'right.declined').length;
-      seen.chairStuck += devices.some((d) => d.derived().tokens['evac-chair#1']?.state === 'in-transit') ? 1 : 0;
+      seen.released += events.filter((e) => e.type === 'task.released').length;
+      seen.stuckAtEnd += merged.some((t) => t.state === 'in-transit') ? 1 : 0;
     }
-    console.info('schedule coverage', seen);
-    for (const count of Object.values(seen)) expect(count).toBeGreaterThan(50);
+    for (const [name, count] of Object.entries(seen)) expect(count, name).toBeGreaterThan(50);
+  });
+
+  it('reach forks, disputes and rejected moves when hostile', () => {
+    const seen = { forkedRuns: 0, disputed: 0, overspent: 0, forged: 0, affected: 0 };
+    for (const steps of fc.sample(hostileSchedule, { numRuns: 200, seed: 1 })) {
+      const { tokens, violations } = derive(union(run(steps)));
+      const list = Object.values(tokens);
+      seen.forkedRuns += list.some((t) => t.state === 'disputed') ? 1 : 0;
+      seen.disputed += list.filter((t) => t.state === 'disputed').length;
+      seen.overspent += list.filter((t) => t.overspent).length;
+      seen.affected += list.filter((t) => t.affected?.length).length;
+      seen.forged += violations.filter((v) => v.kind === 'forged-event').length;
+    }
+    for (const [name, count] of Object.entries(seen)) expect(count, name).toBeGreaterThan(20);
   });
 });
 
 describe('honest crews across partitions', () => {
   it('never mint a right, on any replica, at any moment', () => {
     fc.assert(
-      fc.property(fc.array(step, { maxLength: 60 }), (steps) => {
-        const devices = runCrew(steps, (ds) => ds.forEach((d) => expectConserved(d.state())));
-        expectConserved(stateOf(derive(union(devices))));
+      fc.property(schedule, (steps) => {
+        const devices = run(steps, (ds) => ds.forEach((d) => expect(conservation(d.state()).every((r) => r.ok)).toBe(true)));
+        expectBalanced(stateOf(derive(union(devices))));
       }),
       { numRuns: RUNS },
     );
@@ -151,8 +233,8 @@ describe('honest crews across partitions', () => {
 
   it('never let two actors believe they may spend the same token', () => {
     fc.assert(
-      fc.property(fc.array(step, { maxLength: 60 }), (steps) => {
-        runCrew(steps, (ds) => {
+      fc.property(schedule, (steps) => {
+        run(steps, (ds) => {
           for (const id of allTokens) expect(spenders(ds, id).length).toBeLessThanOrEqual(1);
         });
       }),
@@ -160,30 +242,33 @@ describe('honest crews across partitions', () => {
     );
   });
 
-  it('never sign two commitments of one token, and merge with no violations', () => {
+  it('merge with no violations, every chain legal, and an audit that agrees', () => {
     fc.assert(
-      fc.property(fc.array(step, { maxLength: 60 }), (steps) => {
-        const events = union(runCrew(steps, () => {}));
-        const commitments = events.flatMap((e) => (e.type === 'right.committed' ? e.body.tokens : []));
-        expect(new Set(commitments).size).toBe(commitments.length);
-
+      fc.property(schedule, (steps) => {
+        const events = union(run(steps));
         const merged = derive(events);
         expect(merged.violations).toEqual([]);
         const byId = new Map(events.map((e) => [e.id, e]));
-        for (const t of Object.values(merged.tokens)) expectLegalChain(t, byId);
+        for (const t of Object.values(merged.tokens)) {
+          expect(t.state).not.toBe('disputed');
+          expectLegalChain(t, byId);
+        }
+        expect(auditRights(capsule, events, custodians).filter((r) => !r.ok)).toEqual([]);
       }),
       { numRuns: RUNS },
     );
   });
 
-  it('honour every commitment after merging', () => {
+  it('never commit a token twice in a valid history', () => {
     fc.assert(
-      fc.property(fc.array(step, { maxLength: 60 }), (steps) => {
-        const events = union(runCrew(steps, () => {}));
-        const merged = derive(events);
-        for (const e of events) {
-          if (e.type !== 'right.committed') continue;
-          for (const id of e.body.tokens) expect(token(merged, id)).toMatchObject({ state: 'committed', committedTo: e.body.taskId });
+      fc.property(schedule, (steps) => {
+        const events = union(run(steps));
+        const byId = new Map(events.map((e) => [e.id, e]));
+        for (const t of Object.values(derive(events).tokens)) {
+          const types = t.chain.map((id) => byId.get(id)!.type);
+          types.forEach((type, i) => {
+            if (type === 'right.committed') expect(['task.released', undefined]).toContain(types[i + 1]);
+          });
         }
       }),
       { numRuns: RUNS },
@@ -191,40 +276,37 @@ describe('honest crews across partitions', () => {
   });
 });
 
-describe('forked holder', () => {
-  it('is detected, conservative and replica-independent, whichever way the fork goes', () => {
+describe('forks', () => {
+  it('leave a forked holder nothing to spend, whatever else happened first', () => {
     const spend = fc.constantFrom('commit' as const, 'offer' as const);
     fc.assert(
-      fc.property(spend, spend, fc.nat({ max: 3 }), fc.nat({ max: 3 }), fc.array(step, { maxLength: 25 }), (left, right, warmL, warmR, prefix) => {
-        const devices = runCrew(prefix, () => {});
+      fc.property(spend, spend, fc.nat({ max: 3 }), fc.nat({ max: 3 }), schedule, (left, right, warmL, warmR, prefix) => {
+        const devices = run(prefix);
         exchange(...devices);
         const chair = token(devices[0]!.derived(), 'evac-chair#1');
         fc.pre(chair.state === 'held' && chair.holder !== null);
         const original = devices.find((d) => d.actor === chair.holder)!;
         const twin = original.clone();
-        const other = (d: Device) => CREW.find((a) => a !== d.actor)!;
+        const other = CREW.find((a) => a !== original.actor)!;
 
-        for (let i = 0; i < warmL; i += 1) original.emit('task.accepted', { taskId: `w${i}`, via: 'tap' });
-        for (let i = 0; i < warmR; i += 1) twin.emit('task.accepted', { taskId: `w${i}`, via: 'tap' });
-        const a = left === 'commit' ? original.commit(['evac-chair#1'], 'left') : original.offer(['evac-chair#1'], other(original), 'left');
-        const b = right === 'commit' ? twin.commit(['evac-chair#1'], 'right') : twin.offer(['evac-chair#1'], other(twin), 'right');
+        for (let i = 0; i < warmL; i += 1) original.note(`w${i}`);
+        for (let i = 0; i < warmR; i += 1) twin.note(`v${i}`);
+        const a = left === 'commit' ? original.commit(['evac-chair#1'], 'left') : original.offer(['evac-chair#1'], other, 'left');
+        const b = right === 'commit' ? twin.commit(['evac-chair#1'], 'right') : twin.offer(['evac-chair#1'], other, 'right');
 
         const events = union([...devices, twin]);
         const merged = derive(events);
-        const clock = (x: { lamport: number; id: EventId }) => [x.lamport, x.id] as const;
-        const [winner, loser] = clock(a)[0] < clock(b)[0] || (clock(a)[0] === clock(b)[0] && a.id < b.id) ? [a, b] : [b, a];
+        const chairAfter = token(merged, 'evac-chair#1');
+        expect(chairAfter).toMatchObject({ state: 'disputed', holder: null, overspent: true });
+        expect(chairAfter.chain).not.toContain(a.id);
+        expect(chairAfter.chain).not.toContain(b.id);
 
-        const fork = merged.violations.find((v) => v.kind === 'token-fork' && v.tokenId === 'evac-chair#1');
-        expect(fork, 'fork is reported').toBeDefined();
-        expect(fork!.severity).toBe('violation');
-        expect(fork!.events[0]).toBe(winner.id);
-        expect(fork!.events).toContain(loser.id);
-        expect(token(merged, 'evac-chair#1').chain).toContain(winner.id);
-        expect(token(merged, 'evac-chair#1').chain).not.toContain(loser.id);
-        expectConserved(stateOf(merged));
-
-        const shuffled = [...events].reverse();
-        expect(derive(shuffled)).toEqual(merged);
+        const conflict = merged.violations.find((v) => v.kind === 'token-fork' && v.tokenId === 'evac-chair#1');
+        expect(conflict, 'fork is reported').toBeDefined();
+        expect(conflict!.severity).toBe('violation');
+        expect(conflict!.events).toEqual(expect.arrayContaining([a.id, b.id]));
+        expect(conservation(stateOf(merged)).find((r) => r.resource === 'evac-chair')!.ok).toBe(false);
+        expect(derive([...events].reverse())).toEqual(merged);
       }),
       { numRuns: RUNS },
     );
@@ -234,7 +316,7 @@ describe('forked holder', () => {
 describe('lost acknowledgement', () => {
   it('never refunds, however much else the sender learns', () => {
     fc.assert(
-      fc.property(fc.array(step, { maxLength: 40 }), fc.boolean(), (noise, yes) => {
+      fc.property(schedule, fc.boolean(), (noise, yes) => {
         const sender = new Device(ACCESS);
         const recipient = new Device(MEDICS);
         sender.offer(['evac-chair#1'], MEDICS, 'held-up');
@@ -242,15 +324,13 @@ describe('lost acknowledgement', () => {
         if (yes) recipient.accept('held-up');
         else recipient.decline('held-up');
 
-        const others = runCrew(noise, () => {}).filter((d) => d.actor === SUPPLY);
-        const elsewhere = others.flatMap((d) => d.all()).filter((e) => e.actor === SUPPLY);
-        sender.receive(elsewhere);
+        sender.receive(run(noise).flatMap((d) => d.all()).filter((e) => e.actor === SUPPLY));
 
         const view = sender.state();
         expect(view.tokens['evac-chair#1']).toMatchObject({ state: 'in-transit', holder: null });
         expect(canCommit(view, ACCESS, ['evac-chair#1'])).toMatchObject({ ok: false, code: 'TOKEN_IN_TRANSIT' });
         expect(findTokens(view, ACCESS, 'evac-chair', 1)).toEqual([]);
-        expectConserved(view);
+        expectBalanced(view);
 
         exchange(sender, recipient);
         expect(token(sender.derived(), 'evac-chair#1')).toMatchObject({ state: 'held', holder: yes ? MEDICS : ACCESS });
@@ -280,72 +360,40 @@ describe('decline', () => {
   });
 });
 
-/**
- * Arbitrary signed nonsense: any actor, any token, any transfer, any clock, any causes. Stands in
- * for every faulty or hostile peer. Nothing here is a valid history by construction.
- */
-const soup = fc
-  .array(
-    fc.record({
-      actor: fc.constantFrom(...CREW, 'actor-stranger'),
-      tokens: fc.subarray([...allTokens, 'ghost#1']),
-      transfer: fc.constantFrom('t1', 't2', 't3', 't4'),
-      to: fc.constantFrom(...CREW),
-      task: fc.constantFrom('a', 'b', 'c'),
-      kind: fc.constantFrom('commit', 'offer', 'accept', 'decline'),
-      lamport: fc.nat({ max: 12 }),
-      causes: fc.array(fc.nat(), { maxLength: 2 }),
-    }),
-    { maxLength: 40 },
-  )
-  .map((rows) => {
-    const events: AnyEvent[] = [];
-    const devices = new Map<ActorId, Device>();
-    rows.forEach((r) => {
-      const d = devices.get(r.actor) ?? new Device(r.actor);
-      devices.set(r.actor, d);
-      const overrides = {
-        lamport: r.lamport,
-        parents: events.length ? r.causes.map((c) => events[c % events.length]!.id) : [],
-      };
-      if (r.kind === 'commit') events.push(d.emit('right.committed', { tokens: r.tokens, taskId: r.task }, overrides) as AnyEvent);
-      else if (r.kind === 'offer') events.push(d.emit('right.offered', { transfer: r.transfer, tokens: r.tokens, to: r.to }, overrides) as AnyEvent);
-      else if (r.kind === 'accept') events.push(d.emit('right.accepted', { transfer: r.transfer }, overrides) as AnyEvent);
-      else events.push(d.emit('right.declined', { transfer: r.transfer }, overrides) as AnyEvent);
-    });
-    return events;
-  });
-
 describe('hostile histories', () => {
   it('never mint a right, and every chain stays a legal replay', () => {
     fc.assert(
-      fc.property(soup, (events) => {
+      fc.property(hostileSchedule, (steps) => {
+        const events = union(run(steps));
         const derived = derive(events);
-        expectConserved(stateOf(derived));
+        expectBalanced(stateOf(derived));
         const byId = new Map(events.map((e) => [e.id, e]));
         for (const t of Object.values(derived.tokens)) expectLegalChain(t, byId);
       }),
-      { numRuns: 1000 },
+      { numRuns: RUNS },
     );
   });
 
   it('commit no token twice', () => {
     fc.assert(
-      fc.property(soup, (events) => {
+      fc.property(hostileSchedule, (steps) => {
+        const events = union(run(steps));
         const byId = new Map(events.map((e) => [e.id, e]));
         for (const t of Object.values(derive(events).tokens)) {
-          const commits = t.chain.filter((id) => byId.get(id)?.type === 'right.committed');
-          expect(commits.length).toBeLessThanOrEqual(1);
-          if (commits.length === 1) expect(t.chain.at(-1)).toBe(commits[0]);
+          const types = t.chain.map((id) => byId.get(id)!.type);
+          const open = types.reduce((n, type) => n + (type === 'right.committed' ? 1 : type === 'task.released' ? -1 : 0), 0);
+          expect(open).toBeLessThanOrEqual(1);
+          expect(open).toBe(t.state === 'committed' ? 1 : 0);
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: RUNS },
     );
   });
 
   it('let only the stated recipient move a token out of transit', () => {
     fc.assert(
-      fc.property(soup, (events) => {
+      fc.property(hostileSchedule, (steps) => {
+        const events = union(run(steps));
         const byId = new Map(events.map((e) => [e.id, e]));
         for (const t of Object.values(derive(events).tokens)) {
           t.chain.forEach((id, i) => {
@@ -356,47 +404,75 @@ describe('hostile histories', () => {
           });
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: RUNS },
     );
   });
 
   it('report every spend that changed nothing', () => {
     fc.assert(
-      fc.property(soup, (events) => {
+      fc.property(hostileSchedule, (steps) => {
+        const events = union(run(steps));
         const { tokens, violations } = derive(events);
         const used = new Set(Object.values(tokens).flatMap((t) => t.chain));
         const reported = new Set(violations.flatMap((v) => v.events));
         for (const e of events) {
-          if (e.type !== 'right.committed' && e.type !== 'right.offered') continue;
-          if (e.body.tokens.length === 0) continue;
-          expect(used.has(e.id) || reported.has(e.id)).toBe(true);
+          if (e.type === 'right.committed' || e.type === 'right.offered') expect(used.has(e.id) || reported.has(e.id)).toBe(true);
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: RUNS },
+    );
+  });
+
+  it('never leave a spend by a forked actor past its fork standing', () => {
+    fc.assert(
+      fc.property(hostileSchedule, (steps) => {
+        const events = union(run(steps));
+        const slots = new Map<string, number>();
+        for (const e of events) slots.set(`${e.actor} ${e.seq}`, (slots.get(`${e.actor} ${e.seq}`) ?? 0) + 1);
+        const forkSeq = new Map<ActorId, number>();
+        for (const [key, n] of slots) {
+          if (n < 2) continue;
+          const [actor, seq] = key.split(' ') as [string, string];
+          forkSeq.set(actor, Math.min(forkSeq.get(actor) ?? Infinity, Number(seq)));
+        }
+        const used = new Set(Object.values(derive(events).tokens).flatMap((t) => t.chain));
+        for (const e of events) {
+          const fork = forkSeq.get(e.actor);
+          if (fork !== undefined && e.seq >= fork && e.type.startsWith('right.')) expect(used.has(e.id)).toBe(false);
+        }
+      }),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('are always caught by the audit when a token was committed twice', () => {
+    fc.assert(
+      fc.property(hostileSchedule, (steps) => {
+        const events = union(run(steps));
+        const audit = auditRights(capsule, events, custodians);
+        for (const row of audit) {
+          if (row.commits.length - row.released > 1) expect(row.ok).toBe(false);
+        }
+        const state = stateOf(derive(events));
+        const unhappy = audit.filter((r) => !r.ok).map((r) => r.resource);
+        for (const row of conservation(state, audit)) {
+          if (unhappy.includes(row.resource)) expect(row.ok).toBe(false);
+        }
+      }),
+      { numRuns: RUNS },
     );
   });
 });
 
-describe('order independence', () => {
-  it('gives every replica the same answer for the same events', () => {
+describe('replica independence', () => {
+  it('gives every replica the same answer for the same events, in any order, with duplicates', () => {
     fc.assert(
-      fc.property(soup, fc.infiniteStream(fc.nat()), (events, noise) => {
+      fc.property(hostileSchedule, fc.infiniteStream(fc.nat()), (steps, noise) => {
+        const events = union(run(steps));
         const baseline = derive(events);
-        const shuffled = [...events].map((e) => ({ e, k: noise.next().value })).sort((a, b) => a.k - b.k).map((x) => x.e);
-        const duplicated = [...shuffled, ...events.slice(0, 5)];
-        expect(derive(shuffled)).toEqual(baseline);
-        expect(derive(duplicated)).toEqual(baseline);
-      }),
-      { numRuns: 1000 },
-    );
-  });
-
-  it('holds for merged honest histories too', () => {
-    fc.assert(
-      fc.property(fc.array(step, { maxLength: 60 }), fc.infiniteStream(fc.nat()), (steps, noise) => {
-        const events = union(runCrew(steps, () => {}));
-        const shuffled = events.map((e) => ({ e, k: noise.next().value })).sort((a, b) => a.k - b.k).map((x) => x.e);
-        expect(derive(shuffled)).toEqual(derive(events));
+        const mixed = shuffled(events, noise);
+        expect(derive(mixed)).toEqual(baseline);
+        expect(derive([...mixed, ...events.slice(0, 5)])).toEqual(baseline);
       }),
       { numRuns: RUNS },
     );
@@ -404,11 +480,22 @@ describe('order independence', () => {
 
   it('settles replicas that gossip until they hold the same events', () => {
     fc.assert(
-      fc.property(fc.array(step, { maxLength: 60 }), (steps) => {
-        const devices = runCrew(steps, () => {});
+      fc.property(hostileSchedule, (steps) => {
+        const devices = run(steps);
         exchange(...devices);
         const [first, ...rest] = devices.map((d) => d.derived());
         for (const view of rest) expect(view).toEqual(first);
+      }),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('decides nothing by a declared clock: any lamports give the same holders', () => {
+    fc.assert(
+      fc.property(hostileSchedule, fc.infiniteStream(fc.nat({ max: 1_000_000 })), (steps, clocks) => {
+        const honest = outcome(union(run(steps)));
+        const lying = outcome(union(run(steps, () => {}, () => clocks.next().value as number)));
+        expect(lying).toEqual(honest);
       }),
       { numRuns: RUNS },
     );

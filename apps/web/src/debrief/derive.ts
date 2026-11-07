@@ -63,7 +63,7 @@ export function whoKnewWhat(events: AnyEvent[], roster: Roster, at: number): Kno
     let own = 0;
     const seenTeams = new Set<TeamId>();
     for (const id of known) { const t = teamOf(byId.get(id)!); if (t === team) own++; else if (t) seenTeams.add(t); }
-    const activeOthers = new Set(upto.map(teamOf).filter((t) => t && t !== team));
+    const activeOthers = new Set(upto.map(teamOf).filter((t): t is TeamId => Boolean(t) && t !== team));
     return { team, known: known.size, own, learned: known.size - own, missingFrom: [...activeOthers].filter((t) => !seenTeams.has(t)) };
   });
 }

@@ -1,6 +1,7 @@
-import { conservation, deriveTokens } from '@afterlink/authority';
+import { auditRights, conservation, deriveTokens } from '@afterlink/authority';
 import { custodiansOf, reduce, validateCapsule, verifyCredential } from '@afterlink/mission';
 import { canonicalize, verifyEvent } from '@afterlink/protocol';
+import { buildMissionRecord } from '@afterlink/reconcile';
 import type {
   ActorId,
   AnyEvent,
@@ -37,7 +38,7 @@ export type CheckId =
   | 'authority'
   | 'visibility';
 
-/** `skip`: not run because an earlier check failed. `none`: the file holds no evidence either way. */
+/** `skip`: not run, because an earlier check already failed. `none`: the file holds no evidence either way. */
 export type CheckStatus = 'pass' | 'fail' | 'skip' | 'none';
 
 export interface Finding {
@@ -72,6 +73,18 @@ export interface Visibility {
   blind: BlindTask[];
 }
 
+/** What kept going while the network did not, counted from the events themselves. */
+export interface Continuity {
+  completed: number;
+  withoutHq: number;
+  refusedUnsafe: number;
+  duplicatesPrevented: number;
+  partitions: number;
+  conflictsKept: number;
+  /** What this history cannot settle, stated rather than guessed. */
+  unknowns: string[];
+}
+
 export interface Verdict {
   ok: boolean;
   plain: string;
@@ -87,6 +100,7 @@ export interface Verdict {
   checks: Check[];
   failure: Finding | null;
   visibility: Visibility | null;
+  continuity: Continuity | null;
   /** Policy conflicts: both sides stay on record, and no invariant was broken. */
   notes: string[];
 }
@@ -140,6 +154,7 @@ interface TokenCell {
   holder: ActorId | null;
   state: 'held' | 'in-transit' | 'committed';
   committedTo?: TaskId;
+  transfer?: TransferId;
   /** The last move of this token. Anyone moving it next must have seen this. */
   last: AnyEvent | null;
 }
@@ -152,12 +167,20 @@ interface Transfer {
   answer?: AnyEvent;
 }
 
+interface Commitment {
+  event: AnyEvent;
+  resource: ResourceId;
+  /** Position in the committer's chain where it was handed back. */
+  releasedAt?: number;
+}
+
 interface Replay {
   cells: Map<TokenId, TokenCell>;
+  custodians: Record<TeamId, ActorId>;
   minted: Finding[];
   exclusive: Finding[];
   moves: number;
-  commits: Map<string, { event: AnyEvent; resource: ResourceId }[]>;
+  commits: Map<string, Commitment[]>;
 }
 
 /** Everything one verification run learns, in the order the checks learn it. */
@@ -172,11 +195,15 @@ class Run {
   replay: Replay | null = null;
   state: MissionState | null = null;
   visibility: Visibility | null = null;
+  continuity: Continuity | null = null;
 
+  /** Labels only. Before the capsule is verified these come from the file header. */
   who(actor: ActorId): string {
-    if (this.capsule && actor === this.capsule.issuer) return 'Issuer';
+    const capsule = this.capsule ?? this.file?.capsule;
+    if (actor === capsule?.issuer) return 'Issuer';
     const team = this.roster.get(actor)?.team;
-    return this.capsule?.teams.find((t) => t.id === team)?.name ?? `Device ${short(actor)}`;
+    const teams = Array.isArray(capsule?.teams) ? capsule.teams : [];
+    return teams.find((t) => t.id === team)?.name ?? `Device ${short(actor)}`;
   }
 
   at(e: AnyEvent, reason: string): Finding {
@@ -269,7 +296,7 @@ function checkFile(run: Run, input: string | Uint8Array | MissionFile): Outcome 
   const seen = new Set<string>();
   file.events.forEach((e: unknown, i) => {
     if (!isRecord(e) || typeof e.id !== 'string' || typeof e.actor !== 'string') {
-      findings.push({ reason: `Entry ${i + 1} is not an event` });
+      findings.push({ reason: `Entry ${i + 1} is not a complete event` });
       return;
     }
     const event = e as unknown as AnyEvent;
@@ -309,7 +336,7 @@ function checkIssuer(run: Run, opts: VerifyOptions): Outcome {
   if (file.mission !== checked.capsule.id) findings.push({ reason: 'The file names a different mission from the signed capsule' });
   if (opts.issuer && opts.issuer !== checked.capsule.issuer) findings.push(run.at(genesis, `Issued by ${short(checked.capsule.issuer)}, not the expected key ${short(opts.issuer)}`));
   for (const e of run.events) if (e.mission !== checked.capsule.id) findings.push(run.at(e, 'This event belongs to a different mission'));
-  return { detail: `Key ${short(checked.capsule.issuer)}`, findings };
+  return { detail: short(checked.capsule.issuer), findings };
 }
 
 const PLAIN_REASONS: Record<string, string> = {
@@ -332,7 +359,11 @@ function* checkSignatures(run: Run): Generator<Step, Outcome> {
 function checkChains(run: Run): Outcome {
   const findings: Finding[] = [];
   const chains = new Map<ActorId, AnyEvent[]>();
-  for (const e of run.events) chains.set(e.actor, [...(chains.get(e.actor) ?? []), e]);
+  for (const e of run.events) {
+    const chain = chains.get(e.actor);
+    if (chain) chain.push(e);
+    else chains.set(e.actor, [e]);
+  }
   for (const [actor, chain] of chains) {
     chain.sort((a, b) => a.seq - b.seq);
     let previous: AnyEvent | undefined;
@@ -348,7 +379,7 @@ function checkChains(run: Run): Outcome {
     }
     run.lengths.set(actor, previous?.seq ?? 0);
   }
-  return { detail: `${plural(chains.size, 'chain')}, no gaps, no forks`, findings };
+  return { detail: `${chains.size}, no gaps or forks`, findings };
 }
 
 function checkCredentials(run: Run): Outcome {
@@ -386,7 +417,7 @@ function checkCredentials(run: Run): Outcome {
       findings.push(run.at(e, 'This join event does not match the roster'));
     }
   }
-  return { detail: `${entries.length} of ${entries.length} chain to the issuer`, findings };
+  return { detail: `${entries.length} of ${entries.length}`, findings };
 }
 
 function decisionOf(e: AnyEvent): DecisionRecord | null {
@@ -397,9 +428,11 @@ function decisionOf(e: AnyEvent): DecisionRecord | null {
 function checkCausal(run: Run): Outcome {
   const capsule = run.capsule!;
   const findings: Finding[] = [];
+  let links = 0;
   for (const e of run.events) {
     const clock: Clock = new Map();
     for (const dep of [...(e.prev ? [e.prev] : []), ...e.parents]) {
+      links += 1;
       const cause = run.byId.get(dep);
       if (!cause) {
         if (dep !== e.prev) findings.push(run.at(e, `It depends on event ${short(dep)}, which is not in this file`));
@@ -420,7 +453,7 @@ function checkCausal(run: Run): Outcome {
       else if (seq > (clock.get(actor) ?? 0)) findings.push(run.at(e, `Its decision claims to know ${run.who(actor)} event ${seq}, which it had not received`));
     }
   }
-  return { detail: 'Every cause precedes its effect', findings };
+  return { detail: plural(links, 'link'), findings };
 }
 
 function checkSeal(run: Run): Outcome {
@@ -431,14 +464,15 @@ function checkSeal(run: Run): Outcome {
   if (findings.length === 0 && sealOf(missionFingerprint(run.events), file.roster, file.hqSeen) !== file.seal) {
     findings.push({ reason: 'The file changed after export: its events, roster or observer log no longer match its seal' });
   }
-  return { detail: 'File unchanged since export', findings };
+  return { detail: 'Unchanged since export', findings };
 }
 
 // ---------- Replaying the rights ----------
 
 function replayRights(run: Run): Replay {
   const capsule = run.capsule!;
-  const custodians = custodiansOf(run.file!.roster);
+  const genesis = run.events.find((e) => e.type === 'mission.issued');
+  const custodians = (genesis?.body as { custodians?: Record<TeamId, ActorId> } | undefined)?.custodians ?? custodiansOf(run.file!.roster);
   const cells = new Map<TokenId, TokenCell>();
   for (const r of capsule.resources) {
     for (const t of r.tokens) cells.set(t.id, { id: t.id, resource: r.id, holder: custodians[t.holderTeam] ?? null, state: 'held', last: null });
@@ -447,6 +481,8 @@ function replayRights(run: Run): Replay {
   const minted: Finding[] = [];
   const exclusive: Finding[] = [];
   const commits: Replay['commits'] = new Map();
+  const answered = new Set<string>();
+  for (const e of run.events) if (e.type === 'right.accepted' || e.type === 'right.declined') answered.add(seatKey(e.actor, e.body.transfer));
   let moves = 0;
 
   const blocked = (e: AnyEvent, cell: TokenCell): string | null => {
@@ -487,6 +523,7 @@ function replayRights(run: Run): Replay {
         } else {
           cell.state = 'in-transit';
           cell.holder = null;
+          cell.transfer = e.body.transfer;
         }
       }
       if (e.type === 'right.offered') transfers.set(e.body.transfer, { offer: e, from: e.actor, to: e.body.to, tokens: ids });
@@ -495,39 +532,65 @@ function replayRights(run: Run): Replay {
       if (!transfer) exclusive.push(run.at(e, 'It answers a transfer nobody offered'));
       else if (e.actor !== transfer.to) exclusive.push(run.at(e, `${run.who(e.actor)} answered a transfer addressed to ${run.who(transfer.to)}`));
       else if (!run.saw(e, transfer.offer)) exclusive.push(run.at(e, 'It answers an offer it had not received'));
-      else if (transfer.answer) {
-        if (transfer.answer.type !== e.type) exclusive.push(run.at(e, `${run.who(e.actor)} both accepted and declined one transfer`));
-      } else {
+      else if (transfer.answer) exclusive.push(run.at(e, `${run.who(e.actor)} answered one transfer twice`));
+      else {
         transfer.answer = e;
         moves += 1;
         for (const id of transfer.tokens) {
           const cell = cells.get(id)!;
           cell.state = 'held';
           cell.holder = e.type === 'right.accepted' ? transfer.to : transfer.from;
+          delete cell.transfer;
           cell.last = e;
         }
       }
+    } else if (e.type === 'task.released') {
+      for (const cell of cells.values()) {
+        if (cell.state !== 'committed' || cell.holder !== e.actor || cell.committedTo !== e.body.taskId || !run.saw(e, cell.last!)) continue;
+        cell.state = 'held';
+        delete cell.committedTo;
+        cell.last = e;
+        moves += 1;
+      }
+      for (const c of commits.get(seatKey(e.actor, e.body.taskId)) ?? []) c.releasedAt ??= e.seq;
+    } else if (e.type === 'conflict.resolved') {
+      const ruling = (e.body as { tokenHolder?: { tokenId: TokenId; holder: ActorId } }).tokenHolder;
+      if (!ruling) continue;
+      if (e.actor !== capsule.issuer) {
+        exclusive.push(run.at(e, `${run.who(e.actor)} ruled on a right without the authority to`));
+        continue;
+      }
+      const cell = cells.get(ruling.tokenId);
+      const to = cell?.transfer ? transfers.get(cell.transfer)?.to : undefined;
+      if (!cell || cell.state !== 'in-transit' || !run.roster.has(ruling.holder) || !run.saw(e, cell.last!) || !to || answered.has(seatKey(to, cell.transfer!))) continue;
+      cell.state = 'held';
+      cell.holder = ruling.holder;
+      delete cell.transfer;
+      cell.last = e;
+      moves += 1;
     }
   }
-  return { cells, minted, exclusive, commits, moves };
+  return { cells, custodians, minted, exclusive, commits, moves };
 }
 
 function checkConservation(run: Run): Outcome {
   const capsule = run.capsule!;
   const replay = (run.replay = replayRights(run));
-  const roster = run.file!.roster;
-  const state = (run.state = reduce(run.events, roster));
+  const state = (run.state = reduce(run.events, run.file!.roster));
   const findings = [...replay.minted];
 
-  const derived = deriveTokens(capsule, run.events, custodiansOf(roster)).tokens;
-  for (const cell of replay.cells.values()) {
-    const other = derived[cell.id];
-    if (other?.state !== cell.state || other.holder !== cell.holder || other.committedTo !== cell.committedTo) {
-      findings.push({ reason: `Two independent replays disagree about ${cell.id}` });
+  // A move the replay refused is named exactly by the next check, so the ledgers are compared only without one.
+  if (replay.exclusive.length === 0) {
+    const derived = deriveTokens(capsule, run.events, replay.custodians).tokens;
+    for (const cell of replay.cells.values()) {
+      const other = derived[cell.id];
+      if (other?.state !== cell.state || other.holder !== cell.holder || other.committedTo !== cell.committedTo) {
+        findings.push({ reason: `Two independent replays disagree about ${cell.id}` });
+      }
     }
-  }
-  for (const row of conservation(state)) {
-    if (!row.ok) findings.push({ reason: `${row.resource}: ${row.issued} issued, but ${row.committed + row.held + row.inTransit} accounted for` });
+    for (const row of conservation(state, auditRights(capsule, run.events, replay.custodians))) {
+      if (!row.ok) findings.push({ reason: `${row.resource}: ${row.issued} issued, and the rights do not add up` });
+    }
   }
 
   const count = (s: TokenCell['state']) => [...replay.cells.values()].filter((c) => c.state === s).length;
@@ -550,7 +613,7 @@ function fromConflicts(run: Run, keep: (c: ConflictRecord) => boolean, known: Fi
 function checkExclusive(run: Run): Outcome {
   const replay = run.replay!;
   const findings = [...replay.exclusive, ...fromConflicts(run, (c) => c.kind === 'token-fork', replay.exclusive)];
-  return { detail: `${plural(replay.moves, 'move')} replayed, one successor each`, findings };
+  return { detail: `${plural(replay.moves, 'move')} replayed`, findings };
 }
 
 // ---------- Authority at the moment of action ----------
@@ -572,7 +635,11 @@ function checkAuthority(run: Run): Outcome {
 
   const fits = (e: AnyEvent, task: TaskId, spec: TaskSpec, verb: string): boolean => {
     const skills = capabilities.get(run.roster.get(e.actor)?.team ?? '');
-    const missing = spec.requires.find((c) => !skills?.has(c));
+    if (!skills) {
+      findings.push(run.at(e, `${run.who(e.actor)} ${verb} ${run.title(task)} but is not on the roster`));
+      return false;
+    }
+    const missing = spec.requires.find((c) => !skills.has(c));
     if (missing === undefined) return true;
     findings.push(run.at(e, `${run.who(e.actor)} ${verb} ${run.title(task)} without the skill ${missing}`));
     return false;
@@ -590,7 +657,7 @@ function checkAuthority(run: Run): Outcome {
       }
       continue;
     }
-    if (!e.type.startsWith('task.')) continue;
+    if (!e.type.startsWith('task.') && e.type !== 'right.committed') continue;
     const taskId = (e.body as { taskId: TaskId }).taskId;
     const entry = known.get(taskId);
     actions += 1;
@@ -623,7 +690,7 @@ function checkAuthority(run: Run): Outcome {
           break;
         }
         if (e.body.via === 'auto' && capsule.fallback.humanApprovalKinds.includes(spec.kind)) findings.push(run.at(e, `${run.title(taskId)} needs a person, and it was ${verb} automatically`));
-        const spent = (run.replay!.commits.get(seat) ?? []).filter((c) => c.event.seq < e.seq);
+        const spent = (run.replay!.commits.get(seat) ?? []).filter((c) => c.event.seq < e.seq && (c.releasedAt ?? Infinity) > e.seq);
         for (const need of spec.needs) {
           const have = spent.filter((c) => c.resource === need.resource).length;
           if (have < need.count) findings.push(run.at(e, `${run.who(e.actor)} ${verb} ${run.title(taskId)} holding ${have} of ${need.count} ${need.resource} rights at that moment`));
@@ -633,7 +700,7 @@ function checkAuthority(run: Run): Outcome {
     }
   }
   const all = [...findings, ...fromConflicts(run, (c) => c.kind !== 'token-fork', findings)];
-  return { detail: `${plural(actions, 'action')} checked`, findings: all };
+  return { detail: plural(actions, 'action'), findings: all };
 }
 
 // ---------- HQ visibility ----------
@@ -673,25 +740,36 @@ function checkVisibility(run: Run): Outcome {
   }
   const basis = spans.size > 0 ? (seen ? 'both' : 'signed') : seen ? 'observer' : 'none';
   run.visibility = { basis, completed: tasks.size, blind: [...blind.values()] };
-  if (basis === 'none') return { detail: 'No observer record in this file', findings: [], status: 'none' };
+  const fieldEvents = run.events.filter((e) => e.type !== 'mission.issued');
+  const record = buildMissionRecord({ events: fieldEvents, state: run.state!, hqSeen: hqSeen ?? [] });
+  run.continuity = {
+    completed: tasks.size,
+    withoutHq: blind.size,
+    refusedUnsafe: record.refusedUnsafe,
+    duplicatesPrevented: record.duplicatesPrevented,
+    partitions: record.episodes.length,
+    conflictsKept: record.conflicts.filter((c) => c.severity === 'policy').length,
+    unknowns: record.unknowns,
+  };
+  if (basis === 'none') return { detail: 'No observer record', findings: [], status: 'none' };
   const source = basis === 'observer' ? 'observer log, unsigned' : 'signed by the teams';
-  return { detail: `${blind.size} of ${plural(tasks.size, 'task')} done with no HQ visibility (${source})`, findings: [] };
+  return { detail: `${blind.size} of ${plural(tasks.size, 'task')} (${source})`, findings: [] };
 }
 
 // ---------- The run ----------
 
-const STAGES: { id: CheckId; label: string; gated?: boolean }[] = [
-  { id: 'file', label: 'File reads' },
-  { id: 'issuer', label: 'One mission, one issuer key' },
-  { id: 'signatures', label: 'Every signature' },
-  { id: 'chains', label: 'Every hash chain' },
-  { id: 'credentials', label: 'Credentials back to the issuer' },
+const STAGES: { id: CheckId; label: string }[] = [
+  { id: 'file', label: 'File format' },
+  { id: 'signatures', label: 'Signatures' },
+  { id: 'issuer', label: 'Issuer key' },
+  { id: 'chains', label: 'Hash chains' },
+  { id: 'credentials', label: 'Issuer credentials' },
   { id: 'causal', label: 'Causal order' },
   { id: 'seal', label: 'File seal' },
-  { id: 'conservation', label: 'Tokens conserved', gated: true },
-  { id: 'exclusive', label: 'No right committed twice', gated: true },
-  { id: 'authority', label: 'Authority at every action', gated: true },
-  { id: 'visibility', label: 'Work outside HQ visibility', gated: true },
+  { id: 'conservation', label: 'Rights conserved' },
+  { id: 'exclusive', label: 'Rights committed once' },
+  { id: 'authority', label: 'Authority' },
+  { id: 'visibility', label: 'Work outside HQ visibility' },
 ];
 
 function plainVerdict(run: Run, failure: Finding | null, ok: boolean): string {
@@ -702,20 +780,19 @@ function plainVerdict(run: Run, failure: Finding | null, ok: boolean): string {
   if (!ok) return 'Not valid.';
   const v = run.visibility;
   const blind = v && v.basis !== 'none' ? ` ${v.blind.length} of ${plural(v.completed, 'task')} done with no HQ visibility.` : '';
-  return `Valid. ${plural(run.events.length, 'event')} from ${plural(run.roster.size, 'team')}, every invariant held.${blind}`;
+  const teams = new Set(run.events.map((e) => run.roster.get(e.actor)?.team).filter((t) => t !== undefined));
+  return `Valid. ${plural(run.events.length, 'event')} from ${plural(teams.size, 'team')}, every invariant held.${blind}`;
 }
 
 /** Yields each check as it really runs, so a screen can show the work as it happens. */
 export function* verifySteps(input: string | Uint8Array | MissionFile, opts: VerifyOptions = {}): Generator<Step, Verdict> {
   const run = new Run();
   const checks: Check[] = [];
-  const failed = () => checks.some((c) => c.status === 'fail');
 
-  for (const stage of STAGES) {
-    const { id, label } = stage;
+  for (const { id, label } of STAGES) {
     yield { kind: 'start', id, label };
     let outcome: Outcome;
-    if ((id !== 'file' && !run.file) || (id !== 'file' && id !== 'issuer' && !run.capsule) || (stage.gated && failed())) {
+    if (checks.some((c) => c.status === 'fail')) {
       outcome = { detail: 'Not checked', findings: [], status: 'skip' };
     } else {
       try {
@@ -765,6 +842,7 @@ export function* verifySteps(input: string | Uint8Array | MissionFile, opts: Ver
     checks,
     failure,
     visibility: run.visibility,
+    continuity: run.continuity,
     notes,
   };
 }

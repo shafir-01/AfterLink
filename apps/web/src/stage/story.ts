@@ -1,7 +1,6 @@
 import type { MissionCapsule, TeamId } from '@afterlink/protocol';
 import type { DemoBeat } from '@afterlink/mission';
-
-export type StepId = 'break' | 'split' | 'contest' | 'carry' | 'restore' | 'debrief';
+import type { StepId } from './contract';
 
 export const STEPS: StepId[] = ['break', 'split', 'contest', 'carry', 'restore', 'debrief'];
 

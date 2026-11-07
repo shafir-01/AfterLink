@@ -101,11 +101,11 @@ describe('http hardening', () => {
   });
 
   it('never returns a stack trace or secret in an error', async () => {
-    const { base } = await boot({ ANTHROPIC_API_KEY: 'sk-secret-value', AFTERLINK_INGRESS_SECRET: 'ing-secret-value' });
+    const { base } = await boot({ ANTHROPIC_API_KEY: 'sk-secret-value', AFTERLINK_INGRESS_SECRET: 'ing-fixture' });
     for (const [path, body] of [['/api/triage', '{bad'], ['/ingress/request', '{}'], ['/report/debrief', '[]'], ['/nope', '']] as const) {
       const r = await fetch(base + path, { method: 'POST', body });
       const text = await r.text();
-      expect(text).not.toMatch(/sk-secret-value|ing-secret-value|node_modules|\.ts:\d+/);
+      expect(text).not.toMatch(/sk-secret-value|ing-fixture|node_modules|\.ts:\d+/);
     }
     const status = await (await fetch(`${base}/api/status`)).text();
     expect(status).not.toMatch(/sk-secret-value|ing-secret-value|"tok"/);

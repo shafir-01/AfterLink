@@ -1,0 +1,131 @@
+{
+  "model": "eleven_flash_v2_5",
+  "clips": [
+    {
+      "id": "hq-down",
+      "team": "system",
+      "text": "Command post offline. Teams keep going.",
+      "file": "hq-down.mp3",
+      "bytes": 25538
+    },
+    {
+      "id": "medics-network",
+      "team": "medics",
+      "text": "Medics. Network's gone. Carrying on.",
+      "file": "medics-network.mp3",
+      "bytes": 16134
+    },
+    {
+      "id": "access-network",
+      "team": "access",
+      "text": "Access. Link lost. Working from what we know.",
+      "file": "access-network.mp3",
+      "bytes": 27628
+    },
+    {
+      "id": "facilities-network",
+      "team": "facilities",
+      "text": "Facilities. No signal. We keep working.",
+      "file": "facilities-network.mp3",
+      "bytes": 18015
+    },
+    {
+      "id": "supply-network",
+      "team": "supply",
+      "text": "Supply. Network's down. Using our own list.",
+      "file": "supply-network.mp3",
+      "bytes": 25747
+    },
+    {
+      "id": "medics-split",
+      "team": "medics",
+      "text": "Medics. Only Access in range now.",
+      "file": "medics-split.mp3",
+      "bytes": 16552
+    },
+    {
+      "id": "supply-split",
+      "team": "supply",
+      "text": "Supply. Lost contact with Access and Medics.",
+      "file": "supply-split.mp3",
+      "bytes": 30972
+    },
+    {
+      "id": "access-holding",
+      "team": "access",
+      "text": "Access. We can't reach Supply. Holding the chair.",
+      "file": "access-holding.mp3",
+      "bytes": 27210
+    },
+    {
+      "id": "facilities-refuse",
+      "team": "facilities",
+      "text": "Facilities. The chair isn't ours to promise. Declined.",
+      "file": "facilities-refuse.mp3",
+      "bytes": 34315
+    },
+    {
+      "id": "medics-refuse",
+      "team": "medics",
+      "text": "Medics. Refused. The chair is already spoken for.",
+      "file": "medics-refuse.mp3",
+      "bytes": 25120
+    },
+    {
+      "id": "supply-courier",
+      "team": "supply",
+      "text": "Supply. Courier's on the way with the update.",
+      "file": "supply-courier.mp3",
+      "bytes": 20523
+    },
+    {
+      "id": "access-scan",
+      "team": "access",
+      "text": "Access. Courier's here. Scanning the update.",
+      "file": "access-scan.mp3",
+      "bytes": 22821
+    },
+    {
+      "id": "supply-received",
+      "team": "supply",
+      "text": "Supply. Update received, rerouting via west gate.",
+      "file": "supply-received.mp3",
+      "bytes": 30345
+    },
+    {
+      "id": "facilities-restore",
+      "team": "facilities",
+      "text": "Facilities. Signal's back. Syncing now.",
+      "file": "facilities-restore.mp3",
+      "bytes": 18433
+    },
+    {
+      "id": "medics-restore",
+      "team": "medics",
+      "text": "Medics. Link restored. Sharing our log.",
+      "file": "medics-restore.mp3",
+      "bytes": 19060
+    },
+    {
+      "id": "medics-done",
+      "team": "medics",
+      "text": "Medics. First aid done at the north gate.",
+      "file": "medics-done.mp3",
+      "bytes": 18851
+    },
+    {
+      "id": "facilities-done",
+      "team": "facilities",
+      "text": "Facilities. Path cleared.",
+      "file": "facilities-done.mp3",
+      "bytes": 16134
+    },
+    {
+      "id": "all-back",
+      "team": "system",
+      "text": "All teams back in contact.",
+      "file": "all-back.mp3",
+      "bytes": 15716
+    }
+  ]
+}

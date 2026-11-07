@@ -1,8 +1,8 @@
 import { createActor, createMemoryStorage, type ActorNode, type ActorStorage } from '@afterlink/actor';
 import { conservation } from '@afterlink/authority';
 import { MemoryNetwork, type Clock, type LinkConnector, type NegotiatedLink } from '@afterlink/mesh';
-import { provision, reduce } from '@afterlink/mission';
-import { canonicalize, createEvent, eventId, generateKeys, signBytes, fromB64u } from '@afterlink/protocol';
+import { isTaskDone, provision, reduce } from '@afterlink/mission';
+import { EventLog, canonicalize, createEvent, eventId, fromB64u, generateKeys, signBytes } from '@afterlink/protocol';
 import type {
   ActorId,
   AnyEvent,
@@ -19,7 +19,7 @@ import type {
   WireMessage,
 } from '@afterlink/protocol';
 import { sizeOf } from './net.ts';
-import { TIMING, type Attack, type FaultStep, type Incident, type Scenario, type World } from './scenario.ts';
+import { TIMING, type Attack, type FaultStep, type Incident, type Scenario } from './scenario.ts';
 import { EPOCH } from './sim.ts';
 import { emptyReport, type AttackResult, type RunContext, type SystemReport, type SystemUnderTest } from './system.ts';
 import { FieldWorker } from './worker.ts';
@@ -27,7 +27,8 @@ import { FieldWorker } from './worker.ts';
 /** Pause before a volunteer tries again after the device refused a job. */
 const RETRY_REFUSED_MS = 30_000;
 
-export function labCapsule(world: World, issuer: string, issuedAt: number): MissionCapsule {
+export function labCapsule(scenario: Scenario, issuer: string, issuedAt: number): MissionCapsule {
+  const { world } = scenario;
   return {
     v: 1,
     id: 'lab-mission',
@@ -37,7 +38,7 @@ export function labCapsule(world: World, issuer: string, issuedAt: number): Miss
     objectives: [{ id: 'keep-people-safe', title: 'Keep people safe', rank: 1 }],
     teams: world.teams,
     resources: world.resources,
-    tasks: [],
+    tasks: scenario.incidents.filter((i) => i.standing).map((i) => i.spec),
     contingencies: world.contingencies,
     fallback: world.fallback,
     issuer,
@@ -72,6 +73,7 @@ export class AfterLinkSystem implements SystemUnderTest {
   private seats: Seat[] = [];
   private roster: ProvisionBundle['roster'] = [];
   private sent = 0;
+  private sentToObserver = 0;
   private hubReach = new Set<number>([0, 1, 2, 3]);
   private oneWayCut = new Set<string>();
   private blocked: Set<number>[] = [new Set(), new Set(), new Set(), new Set()];
@@ -102,7 +104,7 @@ export class AfterLinkSystem implements SystemUnderTest {
   async start(): Promise<void> {
     const { world } = this.scenario;
     const issuer = generateKeys();
-    const { bundles } = provision(labCapsule(world, issuer.publicKey, EPOCH), issuer, 'lab');
+    const { bundles } = provision(labCapsule(this.scenario, issuer.publicKey, EPOCH), issuer, 'lab');
     this.roster = (bundles[world.teams[0]!.id] as ProvisionBundle).roster;
     const { sim } = this.ctx;
 
@@ -136,7 +138,9 @@ export class AfterLinkSystem implements SystemUnderTest {
     const client = this.network.signal(seat.id);
     const send = client.send.bind(client);
     client.send = (msg) => {
-      this.sent += sizeOf(msg);
+      const size = sizeOf(msg);
+      this.sent += size;
+      if (msg.t === 'report') this.sentToObserver += size;
       send(msg);
     };
     return client;
@@ -176,6 +180,7 @@ export class AfterLinkSystem implements SystemUnderTest {
   }
 
   inject(i: Incident): void {
+    if (i.standing) return;
     this.whenUp(i.reporter, (seat) => seat.node.submitTask(i.spec, { kind: 'human' }));
   }
 
@@ -258,8 +263,11 @@ export class AfterLinkSystem implements SystemUnderTest {
     this.restarted.push({ index, before });
     seat.up = false;
     seat.node.stop();
+    seat.signal?.close();
+    seat.signal = null;
     seat.worker.suspend(downForMs);
     this.ctx.sim.after(downForMs, async () => {
+      if (this.hubReach.has(index)) seat.signal = this.signalClient(seat);
       seat.node = this.makeNode(seat);
       await seat.node.start();
       seat.up = true;
@@ -286,19 +294,18 @@ export class AfterLinkSystem implements SystemUnderTest {
     const view = seat.node.view();
     const now = this.ctx.sim.now;
     for (const t of view.pendingTransfers) seat.node.answerTransfer(t.transfer, true);
-    const current = seat.worker.currentTask;
-    if (current) {
-      const record = view.state.tasks[current];
+    for (const task of seat.worker.tasks()) {
+      const record = view.state.tasks[task];
       const mine = record && (record.owner === seat.id || record.coveredBy?.includes(seat.id));
-      if (!mine || isDone(record)) {
-        seat.worker.drop(current);
-        this.ctx.trace({ t: now, kind: 'abandon', actor: seat.index, task: current });
-      }
+      if (mine && !isDone(record)) continue;
+      const begun = seat.worker.currentTask === task;
+      seat.worker.drop(task);
+      if (begun) this.ctx.trace({ t: now, kind: 'abandon', actor: seat.index, task });
     }
     for (const t of view.myTasks) {
       if (isDone(t)) continue;
       const id = t.spec.id;
-      if ((seat.refusedUntil.get(id) ?? 0) > now) continue;
+      if (seat.finished.has(id) || (seat.refusedUntil.get(id) ?? 0) > now) continue;
       seat.worker.give(id, t.spec.priority, this.ctx.durationOf(id));
     }
   }
@@ -320,6 +327,10 @@ export class AfterLinkSystem implements SystemUnderTest {
 
   bytes(): number {
     return this.sent;
+  }
+
+  observerBytes(): number {
+    return this.sentToObserver;
   }
 
   isConverged(): boolean {
@@ -348,9 +359,16 @@ export class AfterLinkSystem implements SystemUnderTest {
 
     report.conflictsSurfaced = merged.conflicts.length;
     report.conflictsUnresolved = merged.conflicts.filter((c) => !c.resolved).length;
+    report.violations = merged.conflicts.filter((c) => c.severity === 'violation').map((c) => c.kind);
     const finished = new Set(this.seats.flatMap((s) => [...s.finished]));
     report.lostCompletions = [...finished].filter((id) => !isDone(merged.tasks[id])).length;
-    report.conservationBreaches = conservation(merged).filter((row) => !row.ok).length;
+    const rows = conservation(merged);
+    report.conservationBreaches = rows.filter((row) => !row.ok).length;
+    report.rightsInTransit = rows.reduce((n, row) => n + row.inTransit, 0);
+    const replay = new EventLog('lab-mission');
+    replay.ingestMany(this.ctx.rng.fork('replay').shuffle([...union, ...union]));
+    report.replayDivergence = fingerprint(reduce(replay.all(), this.roster)) === fingerprint(merged) ? 0 : 1;
+    report.unauthorisedCommits = this.unauthorisedCommits(replay.all());
     report.attacks = this.attackChecks.map((check) => check());
     if (this.ferry) {
       report.ferryNewFirst = this.ferry.first;
@@ -358,6 +376,34 @@ export class AfterLinkSystem implements SystemUnderTest {
     }
     if (this.restarted.length) report.restartDefects = this.restartLost + this.ownForks(union);
     return report;
+  }
+
+  /**
+   * Walks the rights ledger from the capsule without using any product code, and counts spends by
+   * anyone but the current holder. A holder spending the same token twice is a double-booking, not this.
+   */
+  private unauthorisedCommits(ordered: AnyEvent[]): number {
+    const holders = new Map<TokenId, ActorId | null>();
+    const teamActor = new Map(this.seats.map((s) => [s.bundle.team, s.id]));
+    for (const r of this.scenario.world.resources) for (const t of r.tokens) holders.set(t.id, teamActor.get(t.holderTeam) ?? null);
+    const offers = new Map<string, { tokens: TokenId[]; from: ActorId; to: ActorId }>();
+    let bad = 0;
+    for (const e of ordered) {
+      if (e.type === 'right.offered') {
+        offers.set(e.body.transfer, { tokens: e.body.tokens, from: e.actor, to: e.body.to });
+        for (const token of e.body.tokens) {
+          if (holders.get(token) === e.actor) holders.set(token, null);
+          else bad++;
+        }
+      } else if (e.type === 'right.accepted' || e.type === 'right.declined') {
+        const offer = offers.get(e.body.transfer);
+        if (!offer || e.actor !== offer.to) continue;
+        for (const token of offer.tokens) holders.set(token, e.type === 'right.accepted' ? offer.to : offer.from);
+      } else if (e.type === 'right.committed') {
+        for (const token of e.body.tokens) if (holders.get(token) !== e.actor) bad++;
+      }
+    }
+    return bad;
   }
 
   /** Two events from one device at one sequence number: a restart that reused its place in the chain. */
@@ -385,8 +431,14 @@ export class AfterLinkSystem implements SystemUnderTest {
           this.ctx.trace({ t, kind: 'assign', actor, task: e.body.taskId, via: 'cover' });
           break;
         case 'task.refused':
-        case 'task.deferred':
-          this.ctx.trace({ t, kind: 'refuse', actor, task: e.body.taskId, code: e.body.decision.refusal ?? 'DEFERRED' });
+        case 'task.deferred': {
+          const { refusal, next } = e.body.decision;
+          const asking = next?.length === 1 && next[0] === 'REQUEST_TRANSFER';
+          this.ctx.trace({ t, kind: 'refuse', actor, task: e.body.taskId, code: asking ? 'ASKED_FOR_TRANSFER' : (refusal ?? 'DEFERRED') });
+          break;
+        }
+        case 'task.released':
+          this.ctx.trace({ t, kind: 'abandon', actor, task: e.body.taskId });
           break;
         case 'right.committed':
           for (const token of e.body.tokens) this.ctx.trace({ t, kind: 'commit', actor, task: e.body.taskId, token });
@@ -468,7 +520,7 @@ export class AfterLinkSystem implements SystemUnderTest {
         break;
       }
       case 'replayed-events': {
-        const old = victim.node.events().slice(0, 40);
+        const old = victim.node.events().filter((e) => e.actor !== victim.id).slice(0, 40);
         this.wire(target, { t: 'events', events: old, final: true });
         const result = outcomeNow(null, attack);
         this.attackChecks.push(() => result);
@@ -533,7 +585,7 @@ export class AfterLinkSystem implements SystemUnderTest {
 }
 
 function isDone(t: TaskRecord | undefined): boolean {
-  return t?.status === 'completed';
+  return !!t && isTaskDone(t);
 }
 
 function fingerprint(state: MissionState): string {

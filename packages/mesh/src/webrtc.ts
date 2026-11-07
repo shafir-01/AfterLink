@@ -70,6 +70,10 @@ class ChannelLink implements BoundLink {
     return [...new Set(prints.map((line) => line.trim().toLowerCase()))].sort().join('|');
   }
 
+  protected get bound(): boolean {
+    return this.channel !== null;
+  }
+
   bindChannel(channel: RTCDataChannel): void {
     this.channel = channel;
     channel.binaryType = 'arraybuffer';
@@ -152,7 +156,10 @@ class WebrtcLink extends ChannelLink implements NegotiatedLink {
     if (req.role === 'dialer') {
       this.bindChannel(this.pc.createDataChannel(CHANNEL_LABEL, { ordered: true }));
     } else {
-      this.pc.ondatachannel = (e) => this.bindChannel(e.channel);
+      this.pc.ondatachannel = (e) => {
+        if (e.channel.label === CHANNEL_LABEL && !this.bound) this.bindChannel(e.channel);
+        else e.channel.close();
+      };
     }
   }
 

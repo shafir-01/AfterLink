@@ -1,5 +1,6 @@
-import type { ActorId, AnyEvent, DecisionRecord, MissionState, TaskRecord, TokenRecord } from '@afterlink/protocol';
-import { isFinished, isMine, transfersAddressedTo } from './rules.ts';
+import { pendingTransfers } from '@afterlink/authority';
+import type { AnyEvent, DecisionRecord, TaskRecord } from '@afterlink/protocol';
+import { isFinished, isMine } from './rules.ts';
 import type { ActorView } from './types.ts';
 
 function byUrgency(a: TaskRecord, b: TaskRecord): number {
@@ -28,12 +29,11 @@ export type ViewInput = Omit<
 > & { events: AnyEvent[] };
 
 export function buildView({ events, ...rest }: ViewInput): ActorView {
-  const self: ActorId = rest.self.id;
-  const state: MissionState = rest.state;
+  const self = rest.self.id;
+  const { state } = rest;
   const myTasks = Object.values(state.tasks)
     .filter((t) => isMine(t, self))
     .sort(byUrgency);
-  const tokens: TokenRecord[] = Object.values(state.tokens).filter((t) => t.holder === self && t.state === 'held');
 
   const refusals: DecisionRecord[] = [];
   let lastDecision: DecisionRecord | null = null;
@@ -49,9 +49,9 @@ export function buildView({ events, ...rest }: ViewInput): ActorView {
     ...rest,
     myTasks,
     nextAction: myTasks.find((t) => !isFinished(t)) ?? null,
-    tokens,
+    tokens: Object.values(state.tokens).filter((t) => t.holder === self && t.state === 'held'),
     refusals,
     lastDecision,
-    pendingTransfers: transfersAddressedTo(self, state, events),
+    pendingTransfers: pendingTransfers(state, self),
   };
 }

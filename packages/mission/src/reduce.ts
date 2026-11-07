@@ -20,7 +20,7 @@ import type {
   TeamId,
   TokenRecord,
 } from '@afterlink/protocol';
-import { custodiansOf, validateCapsule, validateTaskSpec, verifyRoster } from './capsule.ts';
+import { custodiansOf, rosterIsGenuine, validateCapsule, validateTaskSpec } from './capsule.ts';
 
 type Roster = ProvisionBundle['roster'];
 type Clock = Map<ActorId, number>;
@@ -52,6 +52,11 @@ interface Work {
 /** Lower rank wins a concurrent claim. Identical on every replica. */
 export function claimRank(taskId: TaskId, actor: ActorId): string {
   return sha256(taskId + actor);
+}
+
+/** The work is done, even if the record of it is in conflict. */
+export function isTaskDone(task: Pick<TaskRecord, 'status' | 'evidence'>): boolean {
+  return task.status === 'completed' || (task.status === 'conflicted' && task.evidence !== undefined);
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
@@ -119,7 +124,7 @@ function isGenesis(e: EventEnvelope<'mission.issued'>, roster: Roster): boolean 
   if (cached !== undefined) return cached;
   const capsule = e.body?.capsule;
   const checked = validateCapsule(capsule);
-  const ok = checked.ok && capsule.issuer === e.actor && capsule.id === e.mission && verifyRoster(roster, capsule).ok;
+  const ok = checked.ok && capsule.issuer === e.actor && capsule.id === e.mission && rosterIsGenuine(roster, capsule);
   memo.set(e.id, ok);
   return ok;
 }
@@ -181,7 +186,7 @@ function settle(work: Work): void {
 class Fold {
   readonly tasks = new Map<TaskId, Work>();
   readonly refs = new Set<string>();
-  readonly observations: Record<string, Observation[]> = {};
+  readonly observations = new Map<string, Observation[]>();
   readonly rejected = new Map<string, ConflictRecord>();
   readonly resolutions = new Map<string, { resolution: string; keep: EventId[] }>();
   readonly actorTeam: Map<ActorId, TeamId>;
@@ -203,10 +208,10 @@ class Fold {
       this.tasks.set(spec.id, newWork(spec, { kind: 'capsule' }, capsule.issuer, capsule.issuedAt));
     }
     for (const e of admitted) {
-      if (e.type !== 'right.committed') continue;
+      if (e.type !== 'right.committed' || !Array.isArray(e.body.tokens)) continue;
       for (const tokenId of e.body.tokens) {
         const token = tokens[tokenId];
-        if (token?.committedTo !== e.body.taskId) continue;
+        if (token?.committedTo === undefined || token.committedTo !== e.body.taskId) continue;
         const key = `${e.actor}|${e.body.taskId}`;
         const held = this.committed.get(key) ?? new Map<string, number>();
         held.set(token.resource, (held.get(token.resource) ?? 0) + 1);
@@ -229,7 +234,7 @@ class Fold {
 
   private refuse(kind: 'unauthorised-action' | 'forged-event', e: AnyEvent, taskId: TaskId | undefined, summary: string): void {
     const id = `${kind}:${e.id}`;
-    this.rejected.set(id, { id, severity: 'violation', kind, ...(taskId ? { taskId } : {}), events: [e.id], summary, resolved: false });
+    this.rejected.set(id, { id, severity: 'violation', kind, ...(typeof taskId === 'string' ? { taskId } : {}), events: [e.id], summary, resolved: false });
   }
 
   private stale(e: AnyEvent, taskId: TaskId, summary: string): void {
@@ -274,8 +279,8 @@ class Fold {
   }
 
   private decisionIsOwn(e: AnyEvent, taskId: TaskId, decision: DecisionRecord): boolean {
-    if (decision?.actor === e.actor && decision?.taskId === taskId) return true;
-    this.refuse('forged-event', e, taskId, `${this.name(e.actor)} signed a decision that belongs to someone else.`);
+    if (decision?.actor === e.actor && decision.taskId === taskId && typeof decision.reason === 'string' && Array.isArray(decision.inputs)) return true;
+    this.refuse('forged-event', e, taskId, `${this.name(e.actor)} sent a decision that is not its own or cannot be read.`);
     return false;
   }
 
@@ -307,7 +312,9 @@ class Fold {
         this.observed(e);
         break;
       case 'conflict.resolved':
-        this.resolutions.set(e.body.conflictId, { resolution: e.body.resolution, keep: e.body.keep });
+        if (typeof e.body.resolution === 'string' && Array.isArray(e.body.keep)) {
+          this.resolutions.set(e.body.conflictId, { resolution: e.body.resolution, keep: e.body.keep });
+        }
         break;
       default:
         break;
@@ -317,6 +324,7 @@ class Fold {
   private created(e: EventEnvelope<'task.created'>): void {
     const { spec, source } = e.body;
     const problems = validateTaskSpec(spec);
+    if (typeof source?.kind !== 'string') problems.push('task source: missing');
     if (problems.length > 0) {
       this.refuse('unauthorised-action', e, undefined, `${this.name(e.actor)} sent a task that cannot be read: ${problems[0]}.`);
       return;
@@ -328,7 +336,7 @@ class Fold {
       }
       return;
     }
-    if (source?.ref !== undefined && source.kind !== 'contingency') {
+    if (source.ref !== undefined && source.kind !== 'contingency') {
       const key = `${source.kind}:${source.ref}`;
       if (this.refs.has(key)) return;
       this.refs.add(key);
@@ -432,6 +440,10 @@ class Fold {
     const work = this.work(e, e.body.taskId);
     if (!work) return;
     if (work.completions.has(e.actor)) return;
+    if (typeof e.body.evidence !== 'string') {
+      this.refuse('unauthorised-action', e, work.record.spec.id, `${this.name(e.actor)} finished "${work.record.spec.title}" with no readable evidence.`);
+      return;
+    }
     if (!this.seatFor(e, work, 'completed') || !this.mayWork(e, work)) return;
     work.completions.set(e.actor, { ...this.mark(e), evidence: e.body.evidence });
     this.touch(work, e);
@@ -449,7 +461,7 @@ class Fold {
       actor: e.actor,
       taskId: e.body.taskId,
       outcome: 'UNKNOWN',
-      reason: e.body.reason,
+      reason: typeof e.body.reason === 'string' ? e.body.reason : '',
       policy: 'task.released',
       reachable: [],
       horizon: {},
@@ -476,7 +488,13 @@ class Fold {
       this.refuse('forged-event', e, undefined, `${this.name(e.actor)} signed an observation in someone else's name.`);
       return;
     }
-    (this.observations[observation.key] ??= []).push(observation);
+    if (typeof observation.key !== 'string' || !Number.isFinite(observation.observedAt) || !Number.isFinite(observation.validForMs)) {
+      this.refuse('unauthorised-action', e, undefined, `${this.name(e.actor)} sent an observation that cannot be read.`);
+      return;
+    }
+    const held = this.observations.get(observation.key);
+    if (held) held.push(observation);
+    else this.observations.set(observation.key, [observation]);
     for (const rule of this.capsule.contingencies) {
       if (rule.when.key !== observation.key || !sameValue(rule.when.equals, observation.value)) continue;
       for (const spec of rule.then.spawn ?? []) {
@@ -485,8 +503,8 @@ class Fold {
     }
   }
 
-  conflicts(tokenViolations: ConflictRecord[]): ConflictRecord[] {
-    const all = [...tokenViolations, ...this.rejected.values()];
+  conflicts(earlier: ConflictRecord[]): ConflictRecord[] {
+    const all = [...earlier, ...this.rejected.values()];
     for (const work of this.tasks.values()) {
       const { spec } = work.record;
       if (work.contested.size > 0) {
@@ -572,17 +590,14 @@ export function reduce(events: AnyEvent[], roster: Roster): MissionState {
     fold.apply(e);
   }
 
-  const taskRecords: Record<TaskId, TaskRecord> = {};
-  for (const [id, work] of fold.tasks) taskRecords[id] = work.record;
-
   return {
     mission: capsule.id,
     capsule,
     actors,
-    tasks: taskRecords,
+    tasks: Object.fromEntries([...fold.tasks].map(([id, work]) => [id, work.record])),
     tokens,
-    observations: fold.observations,
-    conflicts: [...forged, ...fold.conflicts(violations)].sort((a, b) => compareText(a.id, b.id)),
+    observations: Object.fromEntries(fold.observations),
+    conflicts: fold.conflicts([...forged, ...violations]),
     eventCount: ordered.length,
   };
 }

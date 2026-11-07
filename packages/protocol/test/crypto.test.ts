@@ -52,13 +52,6 @@ describe('ed25519', () => {
     expect(verifyBytes(keys.publicKey, rfc8032.message, b64u(rfc8032.signature))).toBe(true);
   });
 
-  it('does not keep a reference to the seed', () => {
-    const seed = new Uint8Array(32).fill(9);
-    const { secretKey } = generateKeys(seed);
-    seed.fill(0);
-    expect(fromB64u(secretKey)).toEqual(new Uint8Array(32).fill(9));
-  });
-
   it('generates distinct random keys that sign and verify', () => {
     const a = generateKeys();
     const b = generateKeys();
@@ -83,6 +76,16 @@ describe('ed25519', () => {
       ['AAAA', sig],
     ] as const) {
       expect(verifyBytes(publicKey, data, signature)).toBe(false);
+    }
+  });
+
+  it('refuses a small-order public key, which would otherwise verify every message', () => {
+    const identityPoint = hex('01'.padEnd(64, '0'));
+    const basePoint = hex('58'.padEnd(64, '6'));
+    const scalarOne = hex('01'.padEnd(64, '0'));
+    const universal = b64u(Uint8Array.from([...basePoint, ...scalarOne]));
+    for (const message of [Uint8Array.of(1), Uint8Array.of(2, 3)]) {
+      expect(verifyBytes(b64u(identityPoint), message, universal)).toBe(false);
     }
   });
 

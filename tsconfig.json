@@ -1,1 +1,1 @@
-{ "extends": "./tsconfig.base.json", "include": ["packages/*/src", "packages/*/test", "apps/*/src"] }
+{ "extends": "./tsconfig.base.json", "include": ["packages/*/src", "packages/*/test", "apps/*/src"], "exclude": ["apps/web/src/*/dev"] }

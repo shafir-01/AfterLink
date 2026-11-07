@@ -18,8 +18,9 @@ export interface RunMetrics {
   lostCompletions: number;
   conservationBreaches: number;
   attacksAccepted: number;
-  duplicateEffects: number;
-  /** Sum of the seven counts above. */
+  unauthorisedCommits: number | null;
+  replayDivergence: number | null;
+  /** Sum of the eight counts above. */
   invariantViolations: number;
   unsafeAllocationsRefused: number;
   /** Refusals where ground truth shows the alternative was a real over-commitment or an action on a false fact. */
@@ -28,7 +29,10 @@ export interface RunMetrics {
   converged: number;
   reconcileMs: number | null;
   bytesToReconcile: number | null;
+  /** The part of bytesToReconcile spent backfilling an observer, not reaching peers. */
+  observerBytesToReconcile: number | null;
   bytesTotal: number;
+  rightsInTransit: number | null;
   conflictsSurfaced: number;
   conflictsUnresolved: number;
   silentOverwrites: number;
@@ -51,16 +55,17 @@ function inWindow(s: Scenario, t: number): boolean {
   return s.windows.some((w) => t >= w.from && t <= w.to);
 }
 
-/** Token commitments that stood: one per (token, task, actor) unless that worker walked away from the task. */
+/** Token commitments still standing at the end: walking away from a task gives back what was booked for it. */
 function standingCommitments(trace: TraceEntry[]): Map<TokenId, Set<string>> {
-  const abandoned = new Set<string>();
-  for (const e of trace) if (e.kind === 'abandon') abandoned.add(`${e.task}|${e.actor}`);
   const out = new Map<TokenId, Set<string>>();
-  for (const e of trace) {
-    if (e.kind !== 'commit' || abandoned.has(`${e.task}|${e.actor}`)) continue;
-    const set = out.get(e.token) ?? new Set<string>();
-    set.add(`${e.task}|${e.actor}`);
-    out.set(e.token, set);
+  for (const e of [...trace].sort((a, b) => a.t - b.t)) {
+    if (e.kind === 'abandon') {
+      for (const set of out.values()) set.delete(`${e.task}|${e.actor}`);
+    } else if (e.kind === 'commit') {
+      const set = out.get(e.token) ?? new Set<string>();
+      set.add(`${e.task}|${e.actor}`);
+      out.set(e.token, set);
+    }
   }
   return out;
 }
@@ -71,10 +76,11 @@ export interface ScoreInput {
   report: SystemReport;
   reconcileMs: number | null;
   bytesToReconcile: number | null;
+  observerBytesToReconcile: number | null;
   bytesTotal: number;
 }
 
-export function score({ scenario: s, trace, report, reconcileMs, bytesToReconcile, bytesTotal }: ScoreInput): RunMetrics {
+export function score({ scenario: s, trace, report, reconcileMs, bytesToReconcile, observerBytesToReconcile, bytesTotal }: ScoreInput): RunMetrics {
   const specs = new Map(s.incidents.map((i) => [i.spec.id, i.spec]));
   const firstDone = new Map<TaskId, number>();
   const completers = new Map<TaskId, Set<number>>();
@@ -146,7 +152,8 @@ export function score({ scenario: s, trace, report, reconcileMs, bytesToReconcil
     report.lostCompletions +
     report.conservationBreaches +
     attacksAccepted +
-    report.duplicateEffects;
+    (report.unauthorisedCommits ?? 0) +
+    (report.replayDivergence ?? 0);
 
   return {
     tasksReported: s.incidents.length,
@@ -162,7 +169,8 @@ export function score({ scenario: s, trace, report, reconcileMs, bytesToReconcil
     lostCompletions: report.lostCompletions,
     conservationBreaches: report.conservationBreaches,
     attacksAccepted,
-    duplicateEffects: report.duplicateEffects,
+    unauthorisedCommits: report.unauthorisedCommits,
+    replayDivergence: report.replayDivergence,
     invariantViolations,
     unsafeAllocationsRefused: refusals.size,
     refusalsConfirmedByTruth,
@@ -170,7 +178,9 @@ export function score({ scenario: s, trace, report, reconcileMs, bytesToReconcil
     converged: report.converged ? 1 : 0,
     reconcileMs,
     bytesToReconcile,
+    observerBytesToReconcile,
     bytesTotal,
+    rightsInTransit: report.rightsInTransit,
     conflictsSurfaced: report.conflictsSurfaced,
     conflictsUnresolved: report.conflictsUnresolved,
     silentOverwrites: report.silentOverwrites,

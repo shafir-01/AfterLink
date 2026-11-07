@@ -228,6 +228,8 @@ export type AnyEvent = { [K in EventType]: EventEnvelope<K> }[EventType];
 export interface SyncSummary {
   mission: MissionId;
   heads: Record<ActorId, { seq: number; id: EventId }>;
+  /** Lowest sequence number at which each actor is known to have forked. Absent when no fork is known. */
+  forked?: Record<ActorId, number>;
 }
 
 export type WireMessage =
@@ -332,7 +334,8 @@ export interface TokenRecord {
   resource: ResourceId;
   holder: ActorId | null;
   holderTeam: TeamId;
-  state: 'held' | 'in-transit' | 'committed';
+  /** disputed: its holder forked, so nobody may spend it until the mission issuer rules. */
+  state: 'held' | 'in-transit' | 'committed' | 'disputed';
   committedTo?: TaskId;
   transfer?: TransferId;
   /** Event ids from issue to current state. */

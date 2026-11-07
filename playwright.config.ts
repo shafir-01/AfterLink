@@ -3,7 +3,9 @@ import { defineConfig, devices } from '@playwright/test';
 const rawPort = 4191;
 const webPort = 4192;
 const relayPort = 4193;
+const pagesPort = 4194;
 const rawOnly = process.env.E2E_RAW_ONLY === '1';
+const productionOnly = process.env.E2E_PRODUCTION === '1';
 
 const rawServer = {
   command: 'node apps/web/e2e/raw/server.mjs',
@@ -19,6 +21,14 @@ const webServer = {
   reuseExistingServer: false,
   timeout: 60_000,
   env: { VITE_RELAY_URL: `http://127.0.0.1:${relayPort}` },
+};
+
+const pagesServer = {
+  command: 'node apps/web/e2e/production/serve.mjs',
+  url: `http://127.0.0.1:${pagesPort}/AfterLink/`,
+  reuseExistingServer: false,
+  timeout: 180_000,
+  env: { PAGES_PORT: String(pagesPort) },
 };
 
 export default defineConfig({
@@ -45,6 +55,8 @@ export default defineConfig({
     },
     { name: 'lab', testMatch: 'lab/**/*.spec.ts', use: { baseURL: `http://127.0.0.1:${webPort}` } },
     { name: 'story', testMatch: 'story/**/*.spec.ts', use: { baseURL: `http://127.0.0.1:${webPort}` } },
+    { name: 'relay', testMatch: 'relay/**/*.spec.ts', use: { baseURL: `http://127.0.0.1:${webPort}` } },
+    { name: 'production', testMatch: 'production/**/*.spec.ts', use: { baseURL: `http://127.0.0.1:${pagesPort}/AfterLink/` } },
   ],
-  webServer: rawOnly ? [rawServer] : [rawServer, webServer],
+  webServer: productionOnly ? [pagesServer] : rawOnly ? [rawServer] : [rawServer, webServer],
 });

@@ -1,7 +1,19 @@
-import { b64u, fromB64u, sha256, type ActorId, type Link, type MissionId, type NextStep } from '@afterlink/protocol';
+import {
+  b64u,
+  fromB64u,
+  sha256,
+  type ActorId,
+  type Link,
+  type LinkState,
+  type MissionId,
+  type NextStep,
+  type ProvisionBundle,
+  type TransportKind,
+  type WireMessage,
+} from '@afterlink/protocol';
+import { dataChannelLink } from '@afterlink/mesh';
 import type { WireFrame } from '@afterlink/ferry';
 import { PayloadAssembler, payloadFrames } from './frames.ts';
-import { ChannelLink } from './link.ts';
 import { newNonce, openPayload, sealAnswer, sealOffer, type OpenFailure, type OfferBody, type Roster, type Signer } from './payload.ts';
 import { compactSdp, expandSdp, type CandidateType, type CompactSdp } from './sdp.ts';
 
@@ -125,6 +137,11 @@ export function refusal(reason: RendezvousFailure): RendezvousRefusal {
   };
 }
 
+/** The identity a provisioned device already holds. Everything here works offline. */
+export function deviceFromBundle(bundle: ProvisionBundle, extra: Partial<RendezvousDevice> = {}): RendezvousDevice {
+  return { keys: bundle.actor, mission: bundle.genesis.mission, roster: bundle.roster, seen: new Set(), ...extra };
+}
+
 function connection(d: RendezvousDevice): RTCPeerConnection {
   const config: RTCConfiguration = { iceServers: d.iceServers ?? [] };
   return d.createConnection ? d.createConnection(config) : new RTCPeerConnection(config);
@@ -199,8 +216,73 @@ async function selectedPath(pc: RTCPeerConnection): Promise<RendezvousLink['path
   }
 }
 
+/**
+ * Announces `open` once, after its adopter has subscribed, so the key proof in the mesh starts
+ * exactly once. Frames that arrive first are held, because the two ends adopt at different moments.
+ */
+class AdoptableLink implements Link {
+  private announced = false;
+  private held: WireMessage[] = [];
+  private messageFn: (msg: WireMessage) => void = () => {};
+  private stateFn: (s: LinkState) => void = () => {};
+  private subscribed = false;
+
+  constructor(private readonly inner: Link & { binding?(): string }) {
+    inner.onMessage((msg) => {
+      if (this.announced) this.messageFn(msg);
+      else this.held.push(msg);
+    });
+    inner.onState((state) => this.stateFn(state));
+  }
+
+  get peer(): ActorId {
+    return this.inner.peer;
+  }
+
+  get kind(): TransportKind {
+    return this.inner.kind;
+  }
+
+  get state(): LinkState {
+    return this.announced || this.inner.state !== 'open' ? this.inner.state : 'connecting';
+  }
+
+  send(msg: WireMessage): void {
+    this.inner.send(msg);
+  }
+
+  onMessage(fn: (msg: WireMessage) => void): void {
+    this.messageFn = fn;
+    this.announceSoon();
+  }
+
+  onState(fn: (s: LinkState) => void): void {
+    this.stateFn = fn;
+    this.announceSoon();
+  }
+
+  close(reason: 'severed' | 'closed'): void {
+    this.inner.close(reason);
+  }
+
+  /** The mesh binds its key proof to this. */
+  binding(): string {
+    return this.inner.binding?.() ?? '';
+  }
+
+  private announceSoon(): void {
+    if (this.subscribed) return;
+    this.subscribed = true;
+    queueMicrotask(() => {
+      this.announced = true;
+      if (this.inner.state === 'open') this.stateFn('open');
+      for (const msg of this.held.splice(0)) this.messageFn(msg);
+    });
+  }
+}
+
 async function linked(peer: ActorId, pc: RTCPeerConnection, channel: RTCDataChannel): Promise<RendezvousLink> {
-  const link = new ChannelLink(peer, pc, channel);
+  const link = new AdoptableLink(dataChannelLink(peer, pc, channel));
   return { ok: true, peer, link, path: await selectedPath(pc), limits: RENDEZVOUS_LIMITS };
 }
 
@@ -256,6 +338,16 @@ function checkOffer(d: RendezvousDevice, body: OfferBody): RendezvousFailure | n
   return null;
 }
 
+async function negotiate(pc: RTCPeerConnection, d: RendezvousDevice, remote: CompactSdp): Promise<{ sdp: CompactSdp; sdpBytes: number } | RendezvousRefusal> {
+  try {
+    await pc.setRemoteDescription({ type: 'offer', sdp: expandSdp(remote, 'offer') });
+    await pc.setLocalDescription(await pc.createAnswer());
+  } catch {
+    return refusal('malformed');
+  }
+  return (await describe(pc, d)) ?? refusal('no-local-network');
+}
+
 /** Device B: verifies a scanned offer against the roster, then returns the signed reply to show. */
 export async function acceptOffer(d: RendezvousDevice, scanned: Scanned): Promise<AcceptedOffer | RendezvousRefusal> {
   const bytes = toBytes(scanned);
@@ -270,12 +362,12 @@ export async function acceptOffer(d: RendezvousDevice, scanned: Scanned): Promis
 
   const pc = connection(d);
   const channel = new Promise<RTCDataChannel>((resolve) => pc.addEventListener('datachannel', (e) => resolve(e.channel), { once: true }));
-  await pc.setRemoteDescription({ type: 'offer', sdp: expandSdp(body.sdp, 'offer') });
-  await pc.setLocalDescription(await pc.createAnswer());
-  const local = await describe(pc, d);
-  if (!local) {
+  const local = await negotiate(pc, d, body.sdp);
+  if ('reason' in local) {
     pc.close();
-    return refusal('no-local-network');
+    // Nothing was shown, so the same code may be scanned again once the problem is fixed.
+    d.seen?.delete(body.nonce);
+    return local;
   }
 
   const payload = sealAnswer(d.keys, d.mission, { offer: digest, sdp: local.sdp });
@@ -305,7 +397,12 @@ export async function completeAnswer(d: RendezvousDevice, pending: PendingOffer,
   if (session.to && body.from !== session.to) return refusal('not-for-this-device');
 
   session.used = true;
-  await session.pc.setRemoteDescription({ type: 'answer', sdp: expandSdp(body.sdp, 'answer') });
+  try {
+    await session.pc.setRemoteDescription({ type: 'answer', sdp: expandSdp(body.sdp, 'answer') });
+  } catch {
+    session.pc.close();
+    return refusal('malformed');
+  }
   const c = await channelOpen(session.pc, Promise.resolve(session.channel), d.connectMs ?? DEFAULT_CONNECT_MS, true);
   if ('ok' in c) {
     session.pc.close();

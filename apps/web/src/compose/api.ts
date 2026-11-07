@@ -1,4 +1,5 @@
 import type { MissionCapsule } from '@afterlink/protocol';
+import { relayBase, relayService } from '../relay';
 
 export interface Meta {
   model: string;
@@ -13,17 +14,16 @@ export type CompileResult =
   | { kind: 'questions'; questions: string[]; meta: Meta }
   | { kind: 'draft'; capsule: MissionCapsule; rights: Right[]; rejectedRights: string[]; meta: Meta };
 
-const base = (import.meta as { env?: { VITE_RELAY_URL?: string } }).env?.VITE_RELAY_URL ?? '';
-
 export async function compileMission(
   objective: string,
   clarifications: { question: string; answer: string }[],
   issuer?: string,
   doFetch: typeof fetch = fetch,
 ): Promise<CompileResult> {
+  if ((await relayService('claude', doFetch)) !== 'live') return { kind: 'unavailable' };
   let res: Response;
   try {
-    res = await doFetch(`${base}/api/mission/compile`, {
+    res = await doFetch(`${relayBase()}/api/mission/compile`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ objective, clarifications, issuer }),

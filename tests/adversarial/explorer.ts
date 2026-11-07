@@ -1,8 +1,8 @@
-import { conservation, deriveTokens, pendingTransfers } from '@afterlink/authority';
+import { auditRights, conservation, deriveTokens, pendingTransfers } from '@afterlink/authority';
 import { provision, reduce } from '@afterlink/mission';
 import { EventLog, createEvent, generateKeys, verifyEvent } from '@afterlink/protocol';
 import type { ActorId, AnyEvent, EventId, MissionCapsule, MissionState, ProvisionBundle, TokenId } from '@afterlink/protocol';
-import { classify } from '@afterlink/reconcile';
+import { buildMissionRecord, classify } from '@afterlink/reconcile';
 
 export interface WorldConfig {
   actors: number;
@@ -96,7 +96,32 @@ function setPartitions(n: number): number[][][] {
 interface View {
   /** Tokens this replica sees as held by each actor index. */
   held: Map<number, TokenId[]>;
+  /** Tasks each actor index has a token committed to, which it may give back. */
+  committed: Map<number, Set<string>>;
   pending: Map<number, { transfer: string; tokens: TokenId[] }[]>;
+}
+
+/**
+ * Tokens with two promises standing at once, read straight from signed events. A token given back
+ * by the actor that committed it may be promised again; the same promise signed twice is not a
+ * second promise.
+ */
+export function doubleCommits(events: AnyEvent[]): TokenId[] {
+  const live = new Map<TokenId, Set<string>>();
+  const out = new Set<TokenId>();
+  for (const e of [...events].sort((a, b) => a.lamport - b.lamport || a.seq - b.seq)) {
+    if (e.type === 'right.committed') {
+      for (const t of e.body.tokens) {
+        const set = live.get(t) ?? new Set<string>();
+        set.add(`${e.actor}|${e.body.taskId}`);
+        live.set(t, set);
+        if (set.size > 1) out.add(t);
+      }
+    } else if (e.type === 'task.released') {
+      for (const set of live.values()) set.delete(`${e.actor}|${e.body.taskId}`);
+    }
+  }
+  return [...out];
 }
 
 export interface Finding {
@@ -197,10 +222,13 @@ export class Explorer {
     if (v) return v;
     const { tokens } = deriveTokens(this.world.capsule, this.eventsOf(set), this.world.custodians);
     const held = new Map<number, TokenId[]>();
+    const committed = new Map<number, Set<string>>();
     for (const t of Object.values(tokens)) {
-      if (t.state !== 'held' || !t.holder) continue;
+      if (!t.holder) continue;
       const i = this.keyIndex.get(t.holder);
-      if (i !== undefined) held.set(i, [...(held.get(i) ?? []), t.id]);
+      if (i === undefined) continue;
+      if (t.state === 'held') held.set(i, [...(held.get(i) ?? []), t.id]);
+      if (t.state === 'committed') committed.set(i, (committed.get(i) ?? new Set()).add(t.committedTo!));
     }
     const pending = new Map<number, { transfer: string; tokens: TokenId[] }[]>();
     const asState = { tokens } as unknown as MissionState;
@@ -208,7 +236,7 @@ export class Explorer {
       const list = pendingTransfers(asState, k.publicKey);
       if (list.length) pending.set(i, list);
     });
-    v = { held, pending };
+    v = { held, committed, pending };
     this.views.set(set, v);
     return v;
   }
@@ -253,6 +281,9 @@ export class Explorer {
           event: this.sign(actor, set, 'right.offered', { transfer, tokens: [token], to: this.world.keys[to]!.publicKey }),
         });
       }
+    }
+    for (const taskId of view.committed.get(actor) ?? []) {
+      out.push({ label: `a${actor} release ${taskId}`, event: this.sign(actor, set, 'task.released', { taskId, reason: 'gave it up' }) });
     }
     for (const p of view.pending.get(actor) ?? []) {
       out.push({ label: `a${actor} accept ${p.transfer}`, event: this.sign(actor, set, 'right.accepted', { transfer: p.transfer }) });
@@ -326,11 +357,7 @@ export class Explorer {
     this.unionChecked.add(set);
     this.terminalUnions++;
     const events = this.eventsOf(set);
-    const commits = new Map<TokenId, AnyEvent[]>();
-    for (const e of events) {
-      if (e.type !== 'right.committed') continue;
-      for (const t of e.body.tokens) commits.set(t, [...(commits.get(t) ?? []), e]);
-    }
+    const doubled = doubleCommits(events);
     const slots = new Set<string>();
     let forked = false;
     for (const e of events) {
@@ -339,21 +366,25 @@ export class Explorer {
       slots.add(key);
     }
     if (forked) this.forkedUnions++;
-    const promises = (list: AnyEvent[]) => new Set(list.map((e) => `${e.actor}|${(e.body as { taskId: string }).taskId}`)).size;
-    const doubled = [...commits].filter(([, list]) => promises(list) > 1).map(([t]) => t);
     const state = reduce(events, this.world.roster);
     const ledgerViolations = state.conflicts.filter((c) => c.severity === 'violation');
     const classified = classify(events, state).filter((c) => c.severity === 'violation');
-    const rows = conservation(state);
+    const rows = conservation(state, auditRights(this.world.capsule, events, this.world.custodians));
+    const shown = buildMissionRecord({ events, state, hqSeen: [] }).conservation;
 
-    if (rows.some((r) => !r.ok)) this.fail('conservation', JSON.stringify(rows), trace);
+    const conserved = rows.every((r) => r.ok);
+    if (!conserved && !forked) this.fail('conservation false alarm', JSON.stringify(rows), trace);
     if (honest) {
       if (doubled.length) this.fail('no double commit', `token ${doubled[0]} committed twice in an honest run`, trace);
       if (ledgerViolations.length) this.fail('no false alarm (ledger)', ledgerViolations[0]!.summary, trace);
       if (classified.length) this.fail('no false alarm (classifier)', classified[0]!.summary, trace);
     } else if (doubled.length) {
       this.doubleCommitUnions++;
-      if (rows.every((r) => r.ok)) this.doubleCommitConservationOk++;
+      if (conserved) {
+        this.doubleCommitConservationOk++;
+        this.fail('conservation reports a double commit', `token ${doubled[0]} promised twice while every row says ok`, trace);
+      }
+      if (shown.every((r) => r.ok)) this.fail('the debrief reports a double commit', `token ${doubled[0]} promised twice while the record says ok`, trace);
       for (const t of doubled) {
         if (!ledgerViolations.some((c) => c.tokenId === t)) this.fail('double commit surfaced (ledger)', `token ${t} committed twice with no violation`, trace);
         if (!classified.some((c) => c.tokenId === t)) this.fail('double commit surfaced (classifier)', `token ${t} committed twice with no violation`, trace);

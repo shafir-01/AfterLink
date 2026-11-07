@@ -50,7 +50,8 @@ const PRIORITY_COST = 1000;
 const RANK_COST = 20;
 const RANK_CAP = 10;
 const LOAD_COST = 30;
-const TRANSFER_COST = 40;
+/** Dearer than crossing the whole site: a capable holder beats any handover, which can stall or fail. */
+const TRANSFER_COST = 150;
 /** Buckets rather than a smooth curve, so peers ticking moments apart still agree. */
 const URGENCY_COST: readonly [withinMs: number, cost: number][] = [
   [60_000, 0],

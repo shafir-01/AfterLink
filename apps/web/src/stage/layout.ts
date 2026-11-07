@@ -1,6 +1,6 @@
 export const DEVICE_W = 300;
-const DEVICE_MIN_H = 400;
-const DEVICE_MAX_H = 640;
+const DEVICE_MIN_H = 560;
+const DEVICE_MAX_H = 760;
 const STACK_BELOW = 760;
 const BUS_H = 26;
 const STACK_GUTTER = 34;
@@ -59,7 +59,7 @@ function stackFrame(width: number, n: number): Frame {
   const scale = w / DEVICE_W;
   const deviceH = DEVICE_MIN_H;
   const h = deviceH * scale;
-  const gap = 18;
+  const gap = 30;
   const drift = 22;
   const x = (width - w) / 2;
   const slots = Array.from({ length: n }, (_, i) => ({ x, y: BUS_H + i * (h + gap), w, h }));

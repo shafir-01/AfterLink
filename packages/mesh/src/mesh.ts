@@ -275,7 +275,6 @@ export class Mesh {
     this.clearRetry(slot);
     slot.attempts++;
     this.track(slot, link);
-    if (link.state === 'open') this.onLinkState(slot, link, 'open');
     return true;
   }
 

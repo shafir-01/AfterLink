@@ -12,6 +12,9 @@ const CLEAN: Quality = { loss: 0, duplicate: 0, delayMs: 0, reorder: false };
 /** Same scatter the real link gate uses when reordering with no delay set. */
 const REORDER_WINDOW_MS = 40;
 
+/** Offer, answer and open, at one signalling latency each. */
+const RENEGOTIATE_MS = TIMING.latencyMs * 4;
+
 const pairKey = (a: number, b: number) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
 export function sizeOf(msg: unknown): number {
@@ -33,6 +36,8 @@ export class SimNet {
   private quality: Quality = CLEAN;
   private handlers = new Map<number, Handler>();
   private down = new Set<number>();
+  /** Called when a broken peer link comes back, as a data channel opening would announce. */
+  onLinkUp: (a: number, b: number) => void = () => {};
 
   constructor(private sim: Sim, private rng: Rng) {}
 
@@ -73,6 +78,7 @@ export class SimNet {
       if (this.cut.has(`${a}>${b}`) && this.cut.has(`${b}>${a}`)) continue;
       if (!this.hubReach.has(a) || !this.hubReach.has(b) || this.down.has(a) || this.down.has(b)) continue;
       this.broken.delete(key);
+      this.sim.after(RENEGOTIATE_MS, () => this.onLinkUp(a, b));
     }
   }
 
@@ -86,9 +92,9 @@ export class SimNet {
   }
 
   send(from: number, to: number, msg: unknown): void {
+    if (!this.reachable(from, to)) return;
     this.sentBytes += sizeOf(msg);
     this.sentMessages++;
-    if (!this.reachable(from, to)) return;
     const q = this.quality;
     if (q.loss > 0 && this.rng.chance(q.loss)) return;
     this.deliver(from, to, msg);

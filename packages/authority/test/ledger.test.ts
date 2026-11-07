@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type { AnyEvent, MissionState, TaskRecord } from '@afterlink/protocol';
-import { canCommit, canOffer, canPerform, conservation, deriveTokens, findTokens, pendingTransfers } from '../src/index.ts';
-import { causalOrder } from '../src/ledger.ts';
+import type { AnyEvent, EventBodies, MissionState, TaskRecord } from '@afterlink/protocol';
+import {
+  auditRights,
+  canCommit,
+  canOffer,
+  canPerform,
+  conservation,
+  deriveTokens,
+  findTokens,
+  pendingTransfers,
+  type LedgerToken,
+} from '../src/index.ts';
+import { causalOrder } from '../src/causal.ts';
 import {
   ACCESS,
   Device,
@@ -11,6 +21,7 @@ import {
   SUPPLY,
   capsule,
   crew,
+  custodians,
   derive,
   exchange,
   stateOf,
@@ -19,6 +30,15 @@ import {
 } from './helpers.ts';
 
 const CHAIR = 'evac-chair#1';
+
+/** Two devices on one key, split at the next sequence number. */
+function forked(actor = ACCESS) {
+  const original = new Device(actor);
+  return { original, twin: original.clone() };
+}
+
+const ruling = (conflictId: string, tokenId: string, holder: string) =>
+  ({ conflictId, resolution: 'Checked in person.', keep: [], tokenHolder: { tokenId, holder } }) as EventBodies['conflict.resolved'];
 
 describe('issue', () => {
   it('starts every token with its team custodian', () => {
@@ -45,6 +65,13 @@ describe('issue', () => {
     const impostor = new Device(ACCESS);
     impostor.emit('mission.issued', { capsule });
     expect(token(derive(impostor.all()), CHAIR).chain).toEqual([]);
+  });
+
+  it('takes custodians from a signed genesis over the argument, so replicas cannot differ', () => {
+    const issuer = new Device(ISSUER);
+    issuer.emit('mission.issued', { capsule, custodians } as EventBodies['mission.issued']);
+    const swapped = { ...custodians, access: MEDICS, medics: ACCESS };
+    expect(deriveTokens(capsule, issuer.all(), swapped).tokens[CHAIR]).toMatchObject({ holder: ACCESS });
   });
 });
 
@@ -82,10 +109,56 @@ describe('commit', () => {
     expect(tokens[CHAIR]).toMatchObject({ state: 'held', holder: ACCESS });
   });
 
-  it('counts a token named twice in one event once', () => {
+  it('refuses a holder whose team cannot do the task', () => {
     const access = new Device(ACCESS);
-    const commit = access.commit([CHAIR, CHAIR], 'carry');
-    expect(token(access.derived(), CHAIR).chain).toEqual([commit.id]);
+    const commit = access.commit([CHAIR], 'needs-first-aid');
+    const { tokens, violations } = access.derived();
+    expect(tokens[CHAIR]).toMatchObject({ state: 'held', holder: ACCESS });
+    expect(violations[0]).toMatchObject({ kind: 'forged-event', events: [commit.id] });
+  });
+
+  it('honours a capable holder, also for a task created during the mission', () => {
+    const medics = new Device(MEDICS);
+    medics.commit(['aed#1'], 'needs-first-aid');
+    medics.emit('task.created', { spec: task('later', ['first-aid']), source: { kind: 'human' } });
+    medics.commit(['aed#2'], 'later');
+    expect(medics.derived().violations).toEqual([]);
+    expect(token(medics.derived(), 'aed#2')).toMatchObject({ committedTo: 'later' });
+  });
+});
+
+describe('malformed rights events', () => {
+  const unchecked = (x: unknown) => x as never;
+
+  for (const [name, tokens] of [
+    ['an empty list', []],
+    ['a token named twice', [CHAIR, CHAIR]],
+    ['a number', 5],
+    ['null', null],
+    ['a list of numbers', [1]],
+  ] as const) {
+    it(`reports ${name} and changes nothing`, () => {
+      const access = new Device(ACCESS);
+      const e = access.emit('right.committed', unchecked({ tokens, taskId: 'carry' }));
+      const { tokens: after, violations } = access.derived();
+      expect(after[CHAIR]).toMatchObject({ state: 'held', holder: ACCESS });
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toMatchObject({ kind: 'forged-event', severity: 'violation', events: [e.id] });
+    });
+  }
+
+  it('reports a commitment with no task', () => {
+    const access = new Device(ACCESS);
+    access.emit('right.committed', unchecked({ tokens: [CHAIR] }));
+    expect(token(access.derived(), CHAIR)).toMatchObject({ state: 'held' });
+    expect(access.derived().violations).toHaveLength(1);
+  });
+
+  it('reports an offer with no transfer id', () => {
+    const access = new Device(ACCESS);
+    access.emit('right.offered', unchecked({ tokens: [CHAIR], to: MEDICS }));
+    expect(token(access.derived(), CHAIR)).toMatchObject({ state: 'held' });
+    expect(access.derived().violations).toHaveLength(1);
   });
 });
 
@@ -111,20 +184,6 @@ describe('transfer', () => {
     expect(held).not.toHaveProperty('transfer');
     expect(held).not.toHaveProperty('to');
     expect(pendingTransfers(medics!.state(), MEDICS)).toEqual([]);
-  });
-
-  it('takes the holder team from a join event for a non-custodian recipient', () => {
-    const volunteer = new Device('actor-volunteer');
-    volunteer.emit('actor.joined', {
-      team: 'supply',
-      name: 'Kim',
-      credential: { mission: capsule.id, actor: 'actor-volunteer', team: 'supply', custodian: false, sig: 'x' },
-    });
-    const access = new Device(ACCESS);
-    access.offer([CHAIR], 'actor-volunteer', 'x');
-    exchange(volunteer, access);
-    volunteer.accept('x');
-    expect(token(volunteer.derived(), CHAIR)).toMatchObject({ holder: 'actor-volunteer', holderTeam: 'supply' });
   });
 
   it('returns the token to the sender on decline', () => {
@@ -155,34 +214,12 @@ describe('transfer', () => {
     exchange(access!, medics!);
     medics!.accept('x');
     for (let i = 0; i < 20; i += 1) {
-      supply!.emit('task.accepted', { taskId: `t${i}`, via: 'tap' });
+      supply!.note(`t${i}`);
       exchange(supply!, access!);
     }
     expect(token(access!.derived(), CHAIR)).toMatchObject({ state: 'in-transit', holder: null });
     expect(canCommit(access!.state(), ACCESS, [CHAIR])).toMatchObject({ ok: false, code: 'TOKEN_IN_TRANSIT' });
     expect(token(medics!.derived(), CHAIR)).toMatchObject({ state: 'held', holder: MEDICS });
-  });
-
-  it('treats a repeated identical answer as harmless', () => {
-    const { [ACCESS]: access, [MEDICS]: medics } = crew();
-    access!.offer([CHAIR], MEDICS, 'x');
-    exchange(access!, medics!);
-    const first = medics!.accept('x');
-    medics!.accept('x');
-    const derived = medics!.derived();
-    expect(derived.violations).toEqual([]);
-    expect(token(derived, CHAIR).chain).toContain(first.id);
-    expect(token(derived, CHAIR).chain).toHaveLength(2);
-  });
-
-  it('ignores an answer whose offer has not arrived yet', () => {
-    const { [ACCESS]: access, [MEDICS]: medics } = crew();
-    access!.offer([CHAIR], MEDICS, 'x');
-    exchange(access!, medics!);
-    const accept = medics!.accept('x');
-    const derived = derive([accept]);
-    expect(token(derived, CHAIR)).toMatchObject({ state: 'held', holder: ACCESS });
-    expect(derived.violations).toEqual([]);
   });
 
   it('lets a right travel through several hands', () => {
@@ -202,6 +239,15 @@ describe('transfer', () => {
     expect(token(derived, CHAIR).chain).toHaveLength(7);
     expect(derived.violations).toEqual([]);
   });
+
+  it('reports an offer to oneself, a stranger or a device that cannot hold rights', () => {
+    for (const to of [ACCESS, 'actor-stranger']) {
+      const access = new Device(ACCESS);
+      const offer = access.offer([CHAIR], to, 'x');
+      expect(token(access.derived(), CHAIR)).toMatchObject({ state: 'held', holder: ACCESS });
+      expect(access.derived().violations[0]).toMatchObject({ kind: 'forged-event', tokenId: CHAIR, events: [offer.id] });
+    }
+  });
 });
 
 describe('the sender can never reclaim alone', () => {
@@ -211,11 +257,11 @@ describe('the sender can never reclaim alone', () => {
     return access;
   }
 
-  it('rejects a commit after the offer as a fork', () => {
+  it('rejects a commit after the offer as a token-fork', () => {
     const access = offered();
     const reclaim = access.commit([CHAIR], 'mine-after-all');
     const { tokens, violations } = access.derived();
-    expect(tokens[CHAIR]).toMatchObject({ state: 'in-transit', to: MEDICS });
+    expect(tokens[CHAIR]).toMatchObject({ state: 'in-transit', to: MEDICS, overspent: true });
     expect(violations[0]).toMatchObject({ kind: 'token-fork', tokenId: CHAIR, taskId: 'mine-after-all' });
     expect(violations[0]!.events[1]).toBe(reclaim.id);
   });
@@ -242,6 +288,18 @@ describe('the sender can never reclaim alone', () => {
     expect(derived.violations[0]).toMatchObject({ kind: 'token-fork' });
     expect(derived.violations[0]!.events).toContain(reclaim.id);
   });
+
+  it('cannot respend blind: a decline only counts once the sender has seen it', () => {
+    const { [ACCESS]: access, [MEDICS]: medics } = crew();
+    access!.offer([CHAIR], MEDICS, 'x');
+    exchange(access!, medics!);
+    const decline = medics!.decline('x');
+    const blind = access!.emit('right.committed', { tokens: [CHAIR], taskId: 'guess' }, { lamport: decline.lamport + 5 });
+    const merged = derive([...access!.all(), ...medics!.all()]);
+    expect(token(merged, CHAIR)).toMatchObject({ state: 'held', holder: ACCESS });
+    expect(merged.violations[0]).toMatchObject({ kind: 'token-fork' });
+    expect(merged.violations[0]!.events).toContain(blind.id);
+  });
 });
 
 describe('answers', () => {
@@ -266,6 +324,33 @@ describe('answers', () => {
     expect(tokens[CHAIR]).toMatchObject({ state: 'held', holder: MEDICS });
     expect(violations[0]).toMatchObject({ kind: 'token-fork', events: [yes.id, no.id] });
   });
+
+  it('reports a second identical answer, with no effect', () => {
+    const { [ACCESS]: access, [MEDICS]: medics } = crew();
+    access!.offer([CHAIR], MEDICS, 'x');
+    exchange(access!, medics!);
+    const first = medics!.accept('x');
+    const second = medics!.accept('x');
+    const derived = medics!.derived();
+    expect(token(derived, CHAIR).chain).toHaveLength(2);
+    expect(derived.violations[0]).toMatchObject({ kind: 'token-fork', events: [first.id, second.id] });
+  });
+
+  it('reports an answer to a transfer nobody offered', () => {
+    const medics = new Device(MEDICS);
+    const accept = medics.accept('ghost');
+    expect(medics.derived().violations[0]).toMatchObject({ kind: 'forged-event', events: [accept.id] });
+  });
+
+  it('refuses an answer to an offer its signer had not seen', () => {
+    const access = new Device(ACCESS);
+    const offer = access.offer([CHAIR], MEDICS, 'x');
+    const medics = new Device(MEDICS);
+    const blind = medics.emit('right.accepted', { transfer: 'x' }, { lamport: offer.lamport + 5 });
+    const { tokens, violations } = derive([...access.all(), ...medics.all()]);
+    expect(tokens[CHAIR]).toMatchObject({ state: 'in-transit', to: MEDICS });
+    expect(violations.flatMap((v) => v.events)).toContain(blind.id);
+  });
 });
 
 describe('transfer ids', () => {
@@ -274,7 +359,7 @@ describe('transfer ids', () => {
     access.offer([CHAIR], MEDICS, 'x');
     const supply = new Device(SUPPLY);
     supply.receive(access.all());
-    const hijack = supply.offer(['cart#1'], SUPPLY, 'x');
+    const hijack = supply.offer(['cart#1'], MEDICS, 'x');
     const { tokens, violations } = supply.derived();
     expect(tokens[CHAIR]).toMatchObject({ state: 'in-transit', to: MEDICS });
     expect(tokens['cart#1']).toMatchObject({ state: 'held', holder: SUPPLY });
@@ -291,65 +376,189 @@ describe('transfer ids', () => {
     expect(token(access!.derived(), CHAIR)).toMatchObject({ state: 'held', holder: ACCESS });
     expect(access!.derived().violations).toHaveLength(1);
   });
+
+  it('cannot re-bind an old acceptance to a new offer', () => {
+    const { [ACCESS]: access, [MEDICS]: medics, [SUPPLY]: supply } = crew();
+    access!.offer([CHAIR], MEDICS, 'x');
+    exchange(access!, medics!);
+    medics!.accept('x');
+    medics!.offer([CHAIR], SUPPLY, 'x');
+    expect(token(medics!.derived(), CHAIR)).toMatchObject({ state: 'held', holder: MEDICS });
+    exchange(medics!, supply!);
+    supply!.accept('x');
+    expect(token(supply!.derived(), CHAIR)).toMatchObject({ state: 'held', holder: MEDICS });
+  });
+
+  it('let two senders who never saw each other use one id without either blocking the other', () => {
+    const access = new Device(ACCESS);
+    const supply = new Device(SUPPLY);
+    access.offer([CHAIR], MEDICS, 'x');
+    supply.offer(['cart#1'], FACILITIES, 'x');
+    const medics = new Device(MEDICS);
+    medics.receive(access.all());
+    medics.accept('x');
+    const merged = derive([...supply.all(), ...medics.all()]);
+    expect(merged.violations).toEqual([]);
+    expect(token(merged, CHAIR)).toMatchObject({ state: 'held', holder: MEDICS });
+    expect(token(merged, 'cart#1')).toMatchObject({ state: 'in-transit', to: FACILITIES });
+  });
+
+  it('refuse to guess between two offers one answer could mean', () => {
+    const access = new Device(ACCESS);
+    const supply = new Device(SUPPLY);
+    access.offer([CHAIR], MEDICS, 'x');
+    supply.offer(['cart#1'], MEDICS, 'x');
+    const medics = new Device(MEDICS);
+    exchange(access, supply, medics);
+    const answer = medics.accept('x');
+    const { tokens, violations } = medics.derived();
+    expect(tokens[CHAIR]).toMatchObject({ state: 'in-transit' });
+    expect(tokens['cart#1']).toMatchObject({ state: 'in-transit' });
+    expect(violations[0]).toMatchObject({ kind: 'forged-event', events: [answer.id] });
+  });
 });
 
-describe('forks', () => {
-  function forkedCommits() {
-    const access = new Device(ACCESS);
-    const twin = access.clone();
-    const a = access.commit([CHAIR], 'a');
+describe('a holder whose history forks', () => {
+  it('freezes a token both branches tried to commit, with no winner', () => {
+    const { original, twin } = forked();
+    const a = original.commit([CHAIR], 'a');
     const b = twin.commit([CHAIR], 'b');
-    return { a, b, all: [...access.all(), ...twin.all()] as AnyEvent[] };
-  }
+    const { tokens, violations } = derive([...original.all(), ...twin.all()]);
+    const [first, second] = [a, b].sort((x, y) => (x.id < y.id ? -1 : 1));
 
-  it('detects a concurrent commit by a forked holder and keeps the lowest id at equal lamport', () => {
-    const { a, b, all } = forkedCommits();
-    expect(a.lamport).toBe(b.lamport);
-    const [winner, loser] = a.id < b.id ? [a, b] : [b, a];
-    const { tokens, violations } = derive(all);
-    expect(tokens[CHAIR]).toMatchObject({ state: 'committed', committedTo: winner.body.taskId, chain: [winner.id] });
+    expect(tokens[CHAIR]).toMatchObject({ state: 'disputed', holder: null, chain: [], overspent: true });
+    expect(tokens[CHAIR]).not.toHaveProperty('committedTo');
     expect(violations).toHaveLength(1);
-    expect(violations[0]).toMatchObject({
-      severity: 'violation',
-      kind: 'token-fork',
-      tokenId: CHAIR,
-      taskId: loser.body.taskId,
-      events: [winner.id, loser.id],
-      resolved: false,
-    });
-    expect(violations[0]!.summary).toBe('Access signed two moves of the evacuation chair. The first stands and the other has no effect.');
+    expect(violations[0]).toMatchObject({ severity: 'violation', kind: 'token-fork', tokenId: CHAIR, resolved: false, taskId: first!.body.taskId });
+    expect([...violations[0]!.events].sort()).toEqual([first!.id, second!.id].sort());
+    expect(violations[0]!.summary).toBe('Access signed two conflicting histories, so the evacuation chair is frozen until the organiser rules.');
   });
 
-  it('keeps the lowest lamport', () => {
-    const access = new Device(ACCESS);
-    const twin = access.clone();
-    twin.emit('task.accepted', { taskId: 'warmup', via: 'tap' });
-    const late = twin.commit([CHAIR], 'late');
-    const early = access.commit([CHAIR], 'early');
-    expect(early.lamport).toBeLessThan(late.lamport);
-    const { tokens, violations } = derive([...twin.all(), ...access.all()]);
-    expect(tokens[CHAIR]).toMatchObject({ committedTo: 'early' });
-    expect(violations[0]!.events).toEqual([early.id, late.id]);
+  it('lets no choice of clock or id pick a winner', () => {
+    for (const lamport of [0, 1, 1000]) {
+      const { original, twin } = forked();
+      original.commit([CHAIR], 'honest');
+      twin.emit('right.committed', { tokens: [CHAIR], taskId: 'chosen' }, { lamport });
+      expect(token(derive([...original.all(), ...twin.all()]), CHAIR).state).toBe('disputed');
+    }
   });
 
-  it('groups a third successor into the same record', () => {
-    const access = new Device(ACCESS);
-    const twin = access.clone();
-    const triplet = access.clone();
-    access.commit([CHAIR], 'a');
-    twin.commit([CHAIR], 'b');
-    triplet.commit([CHAIR], 'c');
-    const { violations } = derive([...access.all(), ...twin.all(), ...triplet.all()]);
+  it('cannot use a fork to take back a transfer made at the fork', () => {
+    const { original, twin } = forked();
+    original.offer([CHAIR], MEDICS, 'x');
+    twin.emit('right.committed', { tokens: [CHAIR], taskId: 'mine' }, { lamport: 0 });
+    const medics = new Device(MEDICS);
+    exchange(original, medics);
+    medics.accept('x');
+    const { tokens } = derive([...medics.all(), ...twin.all()]);
+    expect(tokens[CHAIR]).toMatchObject({ state: 'disputed', holder: null, affected: [MEDICS] });
+  });
+
+  it('leaves alone a token handed over before the fork, so a forked key cannot grief its new holder', () => {
+    const original = new Device(ACCESS);
+    original.offer([CHAIR], MEDICS, 'x');
+    const medics = new Device(MEDICS);
+    exchange(original, medics);
+    medics.accept('x');
+    const twin = original.clone();
+    original.note('left');
+    const grief = twin.commit([CHAIR], 'mine');
+
+    const { tokens, violations } = derive([...medics.all(), ...original.all(), ...twin.all()]);
+    expect(tokens[CHAIR]).toMatchObject({ state: 'held', holder: MEDICS, overspent: true });
+    expect(violations[0]).toMatchObject({ kind: 'token-fork' });
+    expect(violations[0]!.events).toContain(grief.id);
+  });
+
+  it('cannot freeze a token it never held by naming it', () => {
+    const { original, twin } = forked();
+    original.note('left');
+    twin.commit(['aed#1'], 'grief');
+    const { tokens, violations } = derive([...original.all(), ...twin.all()]);
+    expect(tokens['aed#1']).toMatchObject({ state: 'held', holder: MEDICS });
+    expect(violations.find((v) => v.tokenId === 'aed#1')).toMatchObject({ kind: 'forged-event' });
+  });
+
+  it('freezes what it held even when the fork itself touched no rights, without calling it a double spend', () => {
+    const { original, twin } = forked();
+    const a = original.note('left');
+    const b = twin.note('right');
+    const derived = derive([...original.all(), ...twin.all()]);
+    expect(token(derived, CHAIR)).toMatchObject({ state: 'disputed', holder: null });
+    expect(token(derived, CHAIR)).not.toHaveProperty('overspent');
+    expect(derived.violations).toHaveLength(1);
+    expect(derived.violations[0]!.events.sort()).toEqual([a.id, b.id].sort());
+    const row = conservation(stateOf(derived)).find((r) => r.resource === 'evac-chair')!;
+    expect(row).toMatchObject({ disputed: 1, held: 0, ok: true });
+  });
+
+  it('files one record per token its branches spent, and covers the rest under it', () => {
+    const { original, twin } = forked(SUPPLY);
+    original.commit(['cart#1'], 'a');
+    twin.commit(['cart#1'], 'b');
+    const { tokens, violations } = derive([...original.all(), ...twin.all()]);
+    expect(tokens['cart#1']).toMatchObject({ state: 'disputed' });
+    expect(tokens['cart#2']).toMatchObject({ state: 'disputed' });
     expect(violations).toHaveLength(1);
-    expect(violations[0]!.events).toHaveLength(3);
+    expect(violations[0]).toMatchObject({ tokenId: 'cart#1' });
   });
 
-  it('voids everything built on the losing branch and folds it into the one record', () => {
+  it('keeps a commitment made before the fork', () => {
+    const original = new Device(ACCESS);
+    const commit = original.commit([CHAIR], 'done');
+    const twin = original.clone();
+    original.note('left');
+    twin.note('right');
+    expect(token(derive([...original.all(), ...twin.all()]), CHAIR)).toMatchObject({ state: 'committed', committedTo: 'done', chain: [commit.id] });
+  });
+
+  it('does not let a branch release a commitment made before the fork', () => {
+    const original = new Device(ACCESS);
+    original.commit([CHAIR], 'done');
+    const twin = original.clone();
+    original.note('left');
+    twin.emit('task.released', { taskId: 'done', reason: 'changed my mind' });
+    expect(token(derive([...original.all(), ...twin.all()]), CHAIR)).toMatchObject({ state: 'committed' });
+  });
+
+  it('freezes a token returned to it after the fork', () => {
+    const original = new Device(ACCESS);
+    original.offer([CHAIR], MEDICS, 'x');
+    const medics = new Device(MEDICS);
+    exchange(original, medics);
+    const twin = original.clone();
+    original.note('left');
+    twin.note('right');
+    medics.decline('x');
+    expect(token(derive([...original.all(), ...twin.all(), ...medics.all()]), CHAIR)).toMatchObject({ state: 'disputed' });
+  });
+
+  it('freezes a token offered to it when a branch answers', () => {
     const access = new Device(ACCESS);
-    const twin = access.clone();
-    const winner = access.commit([CHAIR], 'won');
-    twin.emit('task.accepted', { taskId: 'warmup', via: 'tap' });
-    const loser = twin.offer([CHAIR], MEDICS, 'x');
+    access.offer([CHAIR], MEDICS, 'x');
+    const medics = new Device(MEDICS);
+    exchange(access, medics);
+    const twin = medics.clone();
+    medics.accept('x');
+    twin.decline('x');
+    expect(token(derive([...access.all(), ...medics.all(), ...twin.all()]), CHAIR)).toMatchObject({ state: 'disputed', holder: null });
+  });
+
+  it('leaves a token in transit to it alone until it answers', () => {
+    const access = new Device(ACCESS);
+    access.offer([CHAIR], MEDICS, 'x');
+    const medics = new Device(MEDICS);
+    exchange(access, medics);
+    const twin = medics.clone();
+    medics.note('left');
+    twin.note('right');
+    expect(token(derive([...access.all(), ...medics.all(), ...twin.all()]), CHAIR)).toMatchObject({ state: 'in-transit', to: MEDICS });
+  });
+
+  it('lists everyone who built on a branch, and honours none of it', () => {
+    const { original, twin } = forked();
+    const left = original.commit([CHAIR], 'left');
+    const right = twin.offer([CHAIR], MEDICS, 'x');
     const { [MEDICS]: medics, [SUPPLY]: supply } = crew();
     exchange(twin, medics!);
     const accept = medics!.accept('x');
@@ -360,70 +569,181 @@ describe('forks', () => {
 
     expect(token(supply!.derived(), CHAIR)).toMatchObject({ state: 'committed', committedTo: 'phantom' });
 
-    const merged = derive([...access.all(), ...supply!.all()]);
-    expect(token(merged, CHAIR)).toMatchObject({ state: 'committed', holder: ACCESS, committedTo: 'won', chain: [winner.id] });
+    const merged = derive([...original.all(), ...supply!.all()]);
+    expect(token(merged, CHAIR)).toMatchObject({ state: 'disputed', affected: [MEDICS, SUPPLY] });
     expect(merged.violations).toHaveLength(1);
-    expect(merged.violations[0]).toMatchObject({ kind: 'token-fork' });
-    expect(merged.violations[0]!.events).toEqual([winner.id, loser.id, accept.id, onward.id, accept2.id, spent.id]);
+    expect(merged.violations[0]!.events.sort()).toEqual([left.id, right.id, accept.id, onward.id, accept2.id, spent.id].sort());
   });
 
   it('does not accuse an honest recipient over a token that stayed clean in a voided offer', () => {
-    const supply = new Device(SUPPLY);
-    const twin = supply.clone();
-    supply.commit(['cart#1'], 'won');
-    twin.emit('task.accepted', { taskId: 'warmup', via: 'tap' });
-    twin.offer(['cart#1', 'cart#2'], MEDICS, 'x');
+    const access = new Device(ACCESS);
+    access.commit([CHAIR], 'won');
+    access.offer(['ghost#1', CHAIR], MEDICS, 'x');
     const medics = new Device(MEDICS);
-    exchange(twin, medics);
+    exchange(access, medics);
     medics.accept('x');
-    medics.commit(['cart#2'], 'phantom');
-
-    const { tokens, violations } = derive([...supply.all(), ...medics.all()]);
-    expect(tokens['cart#2']).toMatchObject({ state: 'held', holder: SUPPLY });
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toMatchObject({ kind: 'token-fork', tokenId: 'cart#1' });
+    const accepted = derive(medics.all());
+    expect(accepted.violations.filter((v) => v.kind === 'forged-event' && v.events.length > 1)).toHaveLength(1);
   });
 
   it('does not accuse the recipient of the losing twin when both twins picked one transfer id', () => {
-    const access = new Device(ACCESS);
-    const twin = access.clone();
-    const winner = access.offer([CHAIR], MEDICS, 'same-id');
-    twin.emit('task.accepted', { taskId: 'warmup', via: 'tap' });
-    const loser = twin.offer([CHAIR], SUPPLY, 'same-id');
+    const { original, twin } = forked();
+    original.offer([CHAIR], MEDICS, 'same-id');
+    twin.offer([CHAIR], SUPPLY, 'same-id');
     const supply = new Device(SUPPLY);
     exchange(twin, supply);
-    const accept = supply.accept('same-id');
-    const spent = supply.commit([CHAIR], 'phantom');
+    supply.accept('same-id');
+    supply.commit([CHAIR], 'phantom');
 
-    const { tokens, violations } = derive([...access.all(), ...supply.all()]);
-    expect(tokens[CHAIR]).toMatchObject({ state: 'in-transit', to: MEDICS });
+    const { tokens, violations } = derive([...original.all(), ...supply.all()]);
+    expect(tokens[CHAIR]).toMatchObject({ state: 'disputed', affected: [SUPPLY] });
     expect(violations).toHaveLength(1);
-    expect(violations[0]).toMatchObject({ kind: 'token-fork', events: [winner.id, loser.id, accept.id, spent.id] });
+    expect(violations[0]).toMatchObject({ kind: 'token-fork' });
   });
 
-  it('lets the true recipient answer after a twin reused the transfer id', () => {
-    const access = new Device(ACCESS);
-    const twin = access.clone();
-    access.offer([CHAIR], MEDICS, 'same-id');
-    twin.emit('task.accepted', { taskId: 'warmup', via: 'tap' });
-    twin.offer([CHAIR], SUPPLY, 'same-id');
-    const medics = new Device(MEDICS);
-    exchange(access, medics);
-    medics.accept('same-id');
-    expect(token(derive([...medics.all(), ...twin.all()]), CHAIR)).toMatchObject({ state: 'held', holder: MEDICS });
-  });
-
-  it('still reports a stranger accepting a voided offer', () => {
-    const access = new Device(ACCESS);
-    const twin = access.clone();
-    access.commit([CHAIR], 'won');
-    twin.emit('task.accepted', { taskId: 'warmup', via: 'tap' });
+  it('still reports a stranger answering a voided offer', () => {
+    const { original, twin } = forked();
+    original.commit([CHAIR], 'left');
     twin.offer([CHAIR], MEDICS, 'x');
     const supply = new Device(SUPPLY);
     exchange(twin, supply);
     const stranger = supply.accept('x');
-    const { violations } = derive([...access.all(), ...supply.all()]);
-    expect(violations.find((v) => v.kind === 'forged-event')!.events).toEqual([stranger.id]);
+    const { tokens, violations } = derive([...original.all(), ...supply.all()]);
+    expect(tokens[CHAIR]).toMatchObject({ state: 'disputed' });
+    expect(violations.flatMap((v) => v.events)).toContain(stranger.id);
+  });
+
+  it('settles only on the set of events, never on which branch arrived first', () => {
+    const { original, twin } = forked();
+    original.commit([CHAIR], 'a');
+    twin.commit([CHAIR], 'b');
+    const forward = [...original.all(), ...twin.all()];
+    expect(derive([...forward].reverse())).toEqual(derive(forward));
+  });
+});
+
+describe('the organiser ruling on a stuck token', () => {
+  function disputed() {
+    const { original, twin } = forked();
+    original.commit([CHAIR], 'a');
+    twin.commit([CHAIR], 'b');
+    const issuer = new Device(ISSUER);
+    exchange(original, twin, issuer);
+    const conflict = issuer.derived().violations[0]!;
+    return { original, twin, issuer, conflict };
+  }
+
+  it('hands a disputed token to the named holder, who may then spend it', () => {
+    const { issuer, conflict } = disputed();
+    const decision = issuer.emit('conflict.resolved', ruling(conflict.id, CHAIR, MEDICS));
+    const after = token(issuer.derived(), CHAIR);
+    expect(after).toMatchObject({ state: 'held', holder: MEDICS, holderTeam: 'medics' });
+    expect(after.chain.at(-1)).toBe(decision.id);
+    expect(after).not.toHaveProperty('affected');
+
+    const medics = new Device(MEDICS);
+    exchange(issuer, medics);
+    medics.commit([CHAIR], 'carry');
+    expect(token(medics.derived(), CHAIR)).toMatchObject({ state: 'committed', committedTo: 'carry' });
+  });
+
+  it('takes no ruling from anyone but the issuer, least of all the forked actor', () => {
+    const { original, conflict } = disputed();
+    const self = original.emit('conflict.resolved', ruling(conflict.id, CHAIR, ACCESS));
+    const { tokens, violations } = original.derived();
+    expect(tokens[CHAIR]).toMatchObject({ state: 'disputed' });
+    expect(violations.flatMap((v) => v.events)).toContain(self.id);
+  });
+
+  it('needs the right conflict named', () => {
+    const { issuer } = disputed();
+    issuer.emit('conflict.resolved', ruling('token-fork:other', CHAIR, MEDICS));
+    expect(token(issuer.derived(), CHAIR)).toMatchObject({ state: 'disputed' });
+    expect(issuer.derived().violations.find((v) => v.kind === 'stale-decision')).toMatchObject({ severity: 'policy' });
+  });
+
+  it('needs the issuer to have seen the evidence', () => {
+    const { original, twin, conflict } = disputed();
+    const blind = new Device(ISSUER);
+    blind.emit('conflict.resolved', ruling(conflict.id, CHAIR, MEDICS));
+    expect(token(derive([...original.all(), ...twin.all(), ...blind.all()]), CHAIR)).toMatchObject({ state: 'disputed' });
+  });
+
+  it('cannot name the forked actor, or someone who cannot hold rights', () => {
+    for (const holder of [ACCESS, 'actor-stranger']) {
+      const { issuer, conflict } = disputed();
+      issuer.emit('conflict.resolved', ruling(conflict.id, CHAIR, holder));
+      expect(token(issuer.derived(), CHAIR)).toMatchObject({ state: 'disputed' });
+    }
+  });
+
+  it('frees a token offered to a lost device', () => {
+    const access = new Device(ACCESS);
+    access.offer([CHAIR], MEDICS, 'x');
+    const issuer = new Device(ISSUER);
+    exchange(access, issuer);
+    issuer.emit('conflict.resolved', ruling('lost-phone', CHAIR, ACCESS));
+    expect(token(issuer.derived(), CHAIR)).toMatchObject({ state: 'held', holder: ACCESS });
+    expect(token(issuer.derived(), CHAIR)).not.toHaveProperty('transfer');
+  });
+
+  it('gives way to a recipient who answered, whichever arrives first', () => {
+    const access = new Device(ACCESS);
+    access.offer([CHAIR], MEDICS, 'x');
+    const issuer = new Device(ISSUER);
+    const medics = new Device(MEDICS);
+    exchange(access, issuer, medics);
+    issuer.emit('conflict.resolved', ruling('lost-phone', CHAIR, ACCESS));
+    medics.accept('x');
+    const events = [...issuer.all(), ...medics.all()];
+    expect(token(derive(events), CHAIR)).toMatchObject({ state: 'held', holder: MEDICS });
+    expect(derive([...events].reverse())).toEqual(derive(events));
+    expect(derive(events).violations[0]).toMatchObject({ kind: 'stale-decision', severity: 'policy' });
+  });
+
+  it('does not reach a token that is simply held or committed', () => {
+    const issuer = new Device(ISSUER);
+    issuer.emit('conflict.resolved', ruling('nothing', CHAIR, MEDICS));
+    expect(token(issuer.derived(), CHAIR)).toMatchObject({ state: 'held', holder: ACCESS });
+  });
+
+  it('leaves ordinary conflict closures alone', () => {
+    const access = new Device(ACCESS);
+    access.emit('conflict.resolved', { conflictId: 'duplicate-effort:t', resolution: 'fine', keep: [] });
+    expect(access.derived().violations).toEqual([]);
+  });
+});
+
+describe('release', () => {
+  it('returns a committed token to the holder who gives the task up', () => {
+    const access = new Device(ACCESS);
+    access.commit([CHAIR], 'carry');
+    const release = access.emit('task.released', { taskId: 'carry', reason: 'not needed' });
+    const after = token(access.derived(), CHAIR);
+    expect(after).toMatchObject({ state: 'held', holder: ACCESS });
+    expect(after).not.toHaveProperty('committedTo');
+    expect(after.chain.at(-1)).toBe(release.id);
+    access.commit([CHAIR], 'other');
+    expect(token(access.derived(), CHAIR)).toMatchObject({ state: 'committed', committedTo: 'other' });
+    expect(access.derived().violations).toEqual([]);
+  });
+
+  it('is only the committer\'s to give', () => {
+    const access = new Device(ACCESS);
+    access.commit([CHAIR], 'carry');
+    const medics = new Device(MEDICS);
+    exchange(access, medics);
+    medics.emit('task.released', { taskId: 'carry', reason: 'mine now' });
+    expect(token(medics.derived(), CHAIR)).toMatchObject({ state: 'committed', holder: ACCESS });
+  });
+
+  it('touches only tokens committed to that task', () => {
+    const supply = new Device(SUPPLY);
+    supply.commit(['cart#1'], 'a');
+    supply.commit(['cart#2'], 'b');
+    supply.emit('task.released', { taskId: 'a', reason: 'done' });
+    expect(token(supply.derived(), 'cart#1')).toMatchObject({ state: 'held' });
+    expect(token(supply.derived(), 'cart#2')).toMatchObject({ state: 'committed' });
   });
 });
 
@@ -518,6 +838,22 @@ describe('canCommit', () => {
     });
   });
 
+  it('refuses everyone on a disputed token and says who decides', () => {
+    const { original, twin } = forked();
+    original.note('left');
+    twin.note('right');
+    const s = stateOf(derive([...original.all(), ...twin.all()]));
+    for (const actor of [ACCESS, MEDICS]) {
+      expect(canCommit(s, actor, [CHAIR])).toEqual({
+        ok: false,
+        code: 'NO_RIGHT',
+        reason: 'The evacuation chair is in dispute. The organiser must rule on it.',
+        next: ['ESCALATE', 'SUBSTITUTE'],
+      });
+    }
+    expect(findTokens(s, ACCESS, 'evac-chair', 1)).toEqual([]);
+  });
+
   it('refuses an unknown token and fails on the first problem in a list', () => {
     expect(canCommit(state(), ACCESS, ['ghost#1'])).toMatchObject({ code: 'NO_RIGHT' });
     expect(canCommit(state(), ACCESS, [CHAIR, 'aed#1'])).toMatchObject({ reason: 'The AED is held by Medics.' });
@@ -578,9 +914,9 @@ describe('conservation', () => {
 
   it('balances a fresh mission', () => {
     expect(conservation(clean())).toEqual([
-      { resource: 'evac-chair', issued: 1, committed: 0, held: 1, inTransit: 0, ok: true },
-      { resource: 'aed', issued: 2, committed: 0, held: 2, inTransit: 0, ok: true },
-      { resource: 'cart', issued: 3, committed: 0, held: 3, inTransit: 0, ok: true },
+      { resource: 'evac-chair', issued: 1, committed: 0, held: 1, inTransit: 0, disputed: 0, ok: true },
+      { resource: 'aed', issued: 2, committed: 0, held: 2, inTransit: 0, disputed: 0, ok: true },
+      { resource: 'cart', issued: 3, committed: 0, held: 3, inTransit: 0, disputed: 0, ok: true },
     ]);
   });
 
@@ -588,7 +924,7 @@ describe('conservation', () => {
     const supply = new Device(SUPPLY);
     supply.commit(['cart#1'], 'haul');
     supply.offer(['cart#2'], MEDICS, 'x');
-    expect(row(supply.state(), 'cart')).toEqual({ resource: 'cart', issued: 3, committed: 1, held: 1, inTransit: 1, ok: true });
+    expect(row(supply.state(), 'cart')).toEqual({ resource: 'cart', issued: 3, committed: 1, held: 1, inTransit: 1, disputed: 0, ok: true });
   });
 
   it('fails when a right goes missing', () => {
@@ -622,10 +958,10 @@ describe('conservation', () => {
     expect(row(s, 'aed').ok).toBe(false);
   });
 
-  it('reports a resource the capsule never issued', () => {
+  it('fails when a disputed token still names a holder', () => {
     const s = clean();
-    s.tokens['drone#1'] = { ...s.tokens['aed#1']!, id: 'drone#1', resource: 'drone' };
-    expect(row(s, 'drone')).toMatchObject({ issued: 0, held: 1, ok: false });
+    s.tokens['aed#1'] = { ...s.tokens['aed#1']!, state: 'disputed' };
+    expect(row(s, 'aed').ok).toBe(false);
   });
 
   it('does not require the optional fields of a state, only forbids those of another', () => {
@@ -635,7 +971,105 @@ describe('conservation', () => {
     expect(row(s, 'aed')).toMatchObject({ committed: 1, inTransit: 1, ok: true });
   });
 
+  it('reports a resource the capsule never issued', () => {
+    const s = clean();
+    s.tokens['drone#1'] = { ...s.tokens['aed#1']!, id: 'drone#1', resource: 'drone' };
+    expect(row(s, 'drone')).toMatchObject({ issued: 0, held: 1, ok: false });
+  });
+
   it('is empty before a capsule arrives', () => {
     expect(conservation({ ...clean(), capsule: null })).toEqual([]);
   });
+
+  it('fails on a double spend even though the sums still balance', () => {
+    const { original, twin } = forked();
+    original.commit([CHAIR], 'a');
+    twin.commit([CHAIR], 'b');
+    const s = stateOf(derive([...original.all(), ...twin.all()]));
+    expect(row(s, 'evac-chair')).toMatchObject({ issued: 1, disputed: 1, ok: false });
+    expect(row(s, 'aed').ok).toBe(true);
+  });
+
+  it('fails when the audit disagrees with a ledger that looks clean', () => {
+    const { original, twin } = forked();
+    original.commit([CHAIR], 'a');
+    twin.commit([CHAIR], 'b');
+    const events = [...original.all(), ...twin.all()];
+    const looksClean = clean();
+    expect(row(looksClean, 'evac-chair').ok).toBe(true);
+    const audited = conservation(looksClean, auditRights(capsule, events, custodians));
+    expect(audited.find((r) => r.resource === 'evac-chair')!.ok).toBe(false);
+  });
 });
+
+describe('auditRights', () => {
+  const audit = (events: AnyEvent[]) => auditRights(capsule, events, custodians);
+  const row = (events: AnyEvent[], id: string) => audit(events).find((r) => r.token === id)!;
+
+  it('finds nothing in a clean transfer and commitment', () => {
+    const { [ACCESS]: access, [MEDICS]: medics } = crew();
+    access!.offer([CHAIR], MEDICS, 'x');
+    exchange(access!, medics!);
+    medics!.accept('x');
+    const commit = medics!.commit([CHAIR], 'carry');
+    expect(row(medics!.all(), CHAIR)).toEqual({ token: CHAIR, resource: 'evac-chair', commits: [commit.id], released: 0, overspent: [], reanswered: [], ok: true });
+  });
+
+  it('counts a double commit across forked branches', () => {
+    const { original, twin } = forked();
+    const a = original.commit([CHAIR], 'a');
+    const b = twin.commit([CHAIR], 'b');
+    const found = row([...original.all(), ...twin.all()], CHAIR);
+    expect(found.commits.sort()).toEqual([a.id, b.id].sort());
+    expect(found).toMatchObject({ overspent: [ACCESS], ok: false });
+  });
+
+  it('counts a spend by someone the right never reached', () => {
+    const medics = new Device(MEDICS);
+    medics.commit([CHAIR], 'grab');
+    expect(row(medics.all(), CHAIR)).toMatchObject({ overspent: [MEDICS], ok: false });
+  });
+
+  it('allows spending again after a decline or a release', () => {
+    const { [ACCESS]: access, [MEDICS]: medics } = crew();
+    access!.offer([CHAIR], MEDICS, 'x');
+    exchange(access!, medics!);
+    medics!.decline('x');
+    exchange(access!, medics!);
+    access!.commit([CHAIR], 'one');
+    access!.emit('task.released', { taskId: 'one', reason: 'freed' });
+    access!.commit([CHAIR], 'two');
+    expect(row(access!.all(), CHAIR)).toMatchObject({ released: 1, overspent: [], ok: true });
+  });
+
+  it('flags an offer answered twice', () => {
+    const { [ACCESS]: access, [MEDICS]: medics } = crew();
+    const offer = access!.offer([CHAIR], MEDICS, 'x');
+    exchange(access!, medics!);
+    medics!.accept('x');
+    medics!.decline('x');
+    expect(row(medics!.all(), CHAIR)).toMatchObject({ reanswered: [offer.id], ok: false });
+  });
+
+  it('counts a ruling as a right reaching its new holder', () => {
+    const access = new Device(ACCESS);
+    access.offer([CHAIR], MEDICS, 'x');
+    const issuer = new Device(ISSUER);
+    exchange(access, issuer);
+    issuer.emit('conflict.resolved', ruling('lost', CHAIR, ACCESS));
+    const again = new Device(ACCESS);
+    again.receive(issuer.all());
+    const events = [...issuer.all(), access.commit([CHAIR], 'after') as AnyEvent];
+    expect(row(events, CHAIR)).toMatchObject({ overspent: [], ok: true });
+  });
+
+  it('survives junk and ignores another mission', () => {
+    const access = new Device(ACCESS);
+    access.emit('right.committed', { tokens: 5, taskId: 't' } as never);
+    access.emit('right.committed', { tokens: [CHAIR], taskId: 'x' }, { mission: 'mission-2' });
+    expect(row(access.all(), CHAIR)).toMatchObject({ commits: [], ok: true });
+  });
+});
+
+const _typecheck: LedgerToken | undefined = undefined;
+void _typecheck;

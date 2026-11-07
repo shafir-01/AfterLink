@@ -1,22 +1,37 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ComponentType } from 'react';
 import type { ActorId } from '@afterlink/protocol';
+import { Radio, useSoundEvents } from '../sound';
+import { ViewBoundary } from '../ui/guarded';
+import type { StageController, StageMark } from './contract';
+import { MissionController } from './controller';
 import { Courier } from './Courier';
-import { Director, type Mark } from './director';
 import { HqBadge } from './HqBadge';
 import { Scene } from './scene';
-import { labelFor } from './story';
 import { Theatre } from './Theatre';
 import { WhyDialog } from './WhyDialog';
 import './stage.css';
 
 const HEADLINE = 'The mission continues, even when the network doesn’t.';
 
-function Tag({ mark, onWhy }: { mark: Mark; onWhy?: () => void }) {
+type WorldView = ComponentType<{ controller: StageController }>;
+
+const worldModules = import.meta.glob('../world/{index,World}.{ts,tsx}');
+const worldEntry = ['../world/index.tsx', '../world/index.ts', '../world/World.tsx'].find((path) => path in worldModules);
+const World = worldEntry
+  ? lazy(async () => {
+      const mod = (await worldModules[worldEntry]!()) as { World?: WorldView; default?: WorldView };
+      return { default: (mod.World ?? mod.default)! };
+    })
+  : null;
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+function Tag({ name, mark, onWhy }: { name: string; mark: StageMark; onWhy?: () => void }) {
   return (
     <p className="st-tag" data-tone={mark.tone}>
       {mark.text}
       {onWhy && (
-        <button onClick={onWhy} aria-label={`Why: ${mark.text}`}>
+        <button onClick={onWhy} aria-label={`Why ${name} got this outcome`}>
           Why?
         </button>
       )}
@@ -25,48 +40,62 @@ function Tag({ mark, onWhy }: { mark: Mark; onWhy?: () => void }) {
 }
 
 export function Stage() {
-  const director = useMemo(() => new Director(), []);
+  const controller = useMemo(() => new MissionController(), []);
   const scene = useMemo(() => new Scene(), []);
-  const snap = useSyncExternalStore(director.subscribe, director.snapshot);
-  const [why, setWhy] = useState<ActorId | null>(null);
+  const snap = useSyncExternalStore(controller.subscribe, controller.snapshot);
+  const primary = useRef<HTMLButtonElement>(null);
+  useSoundEvents(snap, snap.run);
 
   useEffect(() => {
-    director.pulses = { peer: (a, b) => scene.pulsePeer(a, b), hq: (a) => scene.pulseHq(a) };
-    director.start();
-    return () => director.stop();
-  }, [director, scene]);
+    const off = controller.onPulse((p) => (p.kind === 'peer' ? scene.pulsePeer(p.from, p.to) : scene.pulseHq(p.from)));
+    controller.start();
+    return () => {
+      off();
+      controller.stop();
+    };
+  }, [controller, scene]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || e.repeat || why) return;
+      if (e.code !== 'Space' || e.repeat || controller.snapshot().why) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest('button, a, input, textarea, select')) return;
       e.preventDefault();
-      director.advance();
+      controller.advance();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [director, why]);
+  }, [controller]);
 
-  const bind = useCallback((id: ActorId, el: HTMLIFrameElement | null) => director.attach(id, el), [director]);
-  const closeWhy = useCallback(() => setWhy(null), []);
+  const bind = useCallback((id: ActorId, el: HTMLIFrameElement | null) => controller.attach(id, el), [controller]);
+  const closeWhy = useCallback(() => {
+    controller.closeWhy();
+    primary.current?.focus();
+  }, [controller]);
 
   const devices = useMemo(() => snap.seats.map((s) => ({ id: s.id, name: s.name, src: s.src, signalUp: s.signalUp })), [snap.seats]);
   const names = useMemo(() => Object.fromEntries(snap.seats.map((s) => [s.id, s.name])), [snap.seats]);
-  const whoFor = snap.seats.find((s) => s.id === why);
-  const label = snap.error ? 'Restart' : snap.ready ? labelFor(snap.step, snap.resource) : 'Teams connecting';
-  const line = snap.error ?? snap.line;
+  const titles = useMemo(() => Object.fromEntries(snap.truth.tasks.map((t) => [t.id, t.title])), [snap.truth.tasks]);
+
+  const failed = snap.phase === 'failed';
+  const label = failed ? 'Restart' : snap.ready ? snap.story.label : 'Teams connecting';
+  const waiting = !failed && (!snap.ready || snap.story.busy);
+  const safe = snap.score.violations === 0 ? 'and never promised a right twice' : `and ${plural(snap.score.violations, 'violation', 'violations')} surfaced`;
+  const ending = snap.story.finished ? `You cut ${plural(snap.score.linksCut, 'link', 'links')}. They finished ${plural(snap.score.tasksFinished, 'task', 'tasks')} ${safe}.` : null;
+  const line = snap.error ?? ending ?? snap.story.line;
+  const whoFor = snap.seats.find((s) => s.id === snap.why);
+  const verdict = snap.seats.find((s) => snap.marks[s.id]?.tone === 'refused' && s.decisions.length > 0);
 
   const overlay = (id: ActorId) => {
-    const mark = snap.marks[id];
     const seat = snap.seats.find((s) => s.id === id);
-    const decided = (snap.decisions[id]?.length ?? 0) > 0;
-    const verdict = mark?.tone === 'refused' || mark?.tone === 'granted';
+    const mark = snap.marks[id];
+    const decided = (seat?.decisions.length ?? 0) > 0;
+    const judged = mark?.tone === 'refused' || mark?.tone === 'granted';
     return (
       <>
-        {mark && <Tag mark={mark} onWhy={decided && verdict ? () => setWhy(id) : undefined} />}
-        {decided && !verdict && (
-          <button className="st-why" onClick={() => setWhy(id)} aria-label={`Why did ${seat?.name} decide this?`}>
+        {mark && <Tag name={seat?.name ?? ''} mark={mark} onWhy={decided && judged ? () => controller.openWhy(id) : undefined} />}
+        {decided && !judged && (
+          <button className="st-why" onClick={() => controller.openWhy(id)} aria-label={`Why ${seat?.name} decided this`}>
             Why?
           </button>
         )}
@@ -75,42 +104,70 @@ export function Stage() {
   };
 
   return (
-    <main className="st">
+    <main className="st" aria-label="Mission" data-world={World ? 'true' : undefined}>
       <header className="st-head">
-        <p className="st-mission">{snap.mission && `${snap.mission}: ${snap.objective}`}</p>
+        <p className="st-mission">{snap.capsule && `${snap.capsule.name}: ${snap.capsule.objective}`}</p>
         <h1 className="st-title">{HEADLINE}</h1>
       </header>
-
-      <HqBadge hq={snap.hq} />
-
-      <Theatre devices={devices} pairs={snap.pairs} groups={snap.groups} scene={scene} bind={bind} overlay={overlay} marks={snap.marks}>
-        {snap.carry && snap.carry.phase !== 'done' && snap.carry.phase !== 'failed' && <Courier director={director} scene={scene} carry={snap.carry} />}
-      </Theatre>
 
       <footer className="st-foot">
         <p className="st-counters">
           <span>
-            Done <b>{snap.done}</b>
+            Finished <b>{snap.score.tasksFinished}</b>
           </span>
           <span>
-            Refused <b>{snap.refused}</b>
+            Refused <b>{snap.score.unsafeRefused}</b>
+          </span>
+          <span>
+            Cut <b>{snap.score.linksCut}</b>
           </span>
         </p>
         <div className="st-action">
-          <button className="st-primary" onClick={snap.error ? () => director.start() : director.advance} disabled={!snap.error && (!snap.ready || snap.busy)}>
+          <button
+            ref={primary}
+            className="st-primary"
+            aria-disabled={waiting}
+            onClick={() => {
+              if (failed) controller.restart();
+              else if (!waiting) controller.advance();
+            }}
+          >
             {label}
           </button>
           <p className="st-line" role="status" aria-live="polite">
             {line}
+            {verdict && World && (
+              <button className="st-line-why" onClick={() => controller.openWhy(verdict.id)} aria-label={`Why ${verdict.name} refused`}>
+                Why?
+              </button>
+            )}
           </p>
         </div>
         <nav className="st-aside" aria-label="More">
-          <button onClick={() => director.start()}>Restart</button>
+          <Radio />
+          <button onClick={controller.restart}>Restart</button>
           <a href="#/lead">Use real phones</a>
         </nav>
       </footer>
 
-      {whoFor && <WhyDialog name={whoFor.name} decisions={snap.decisions[whoFor.id] ?? []} names={names} titles={snap.titles} onClose={closeWhy} />}
+      {World ? (
+        <div className="st-world">
+          <ViewBoundary title="Map">
+            <Suspense fallback={null}>
+              <World controller={controller} />
+            </Suspense>
+          </ViewBoundary>
+        </div>
+      ) : (
+        <>
+          <HqBadge hq={snap.hq} />
+          <Theatre devices={devices} pairs={snap.pairs} groups={snap.groups} scene={scene} bind={bind} overlay={overlay} marks={snap.marks}>
+            {snap.carry && snap.carry.phase !== 'done' && snap.carry.phase !== 'failed' && <Courier controller={controller} scene={scene} carry={snap.carry} />}
+          </Theatre>
+        </>
+      )}
+
+      {whoFor && <WhyDialog name={whoFor.name} decisions={whoFor.decisions} names={names} titles={titles} onClose={closeWhy} />}
     </main>
   );
 }

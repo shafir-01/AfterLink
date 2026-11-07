@@ -42,6 +42,10 @@ function refusalFor(
     return refuse('NO_RIGHT', `${What} is already committed${task ? ` to ${task}` : ''}.`, ['SUBSTITUTE', 'ESCALATE']);
   }
 
+  if (token.state === 'disputed') {
+    return refuse('NO_RIGHT', `${What} is in dispute. The organiser must rule on it.`, ['ESCALATE', 'SUBSTITUTE']);
+  }
+
   if (token.state === 'in-transit') {
     if (token.to === actor) {
       return refuse('TOKEN_IN_TRANSIT', `${What} is on its way to you. Accept it first.`, ['WAIT_FOR_CONTACT']);

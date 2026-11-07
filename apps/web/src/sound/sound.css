@@ -1,0 +1,9 @@
+.radio { display: flex; align-items: center; gap: 12px; min-height: 36px; color: var(--text, inherit); font-size: 14px; }
+.radio-line { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 28px; }
+.radio-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.radio-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; animation: radio-in 0.25s ease-out; }
+.radio-tag { flex: none; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; border: 1px solid var(--line, currentColor); border-radius: 999px; padding: 1px 8px; }
+.radio-mute { flex: none; font: inherit; font-size: 13px; color: inherit; background: transparent; border: 1px solid var(--line, currentColor); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+.radio-mute:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }
+@keyframes radio-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .radio-text { animation: none; } }

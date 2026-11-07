@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { relayBase, relayService } from '../relay.ts';
 import { CONSEQUENTIAL, INTENT_LABEL, parseUtterance, type Intent } from './intents.ts';
 import './voice.css';
 
@@ -43,7 +44,7 @@ const CONFIRM_TEXT: Record<Intent, string> = {
   next: '',
 };
 
-export function PushToTalk({ online, subject, baseUrl = '', onIntent, onNotice }: PushToTalkProps) {
+export function PushToTalk({ online, subject, baseUrl = relayBase(), onIntent, onNotice }: PushToTalkProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [message, setMessage] = useState('');
   const [pending, setPending] = useState<Intent | null>(null);
@@ -116,6 +117,7 @@ export function PushToTalk({ online, subject, baseUrl = '', onIntent, onNotice }
     async (blob: Blob) => {
       setPhase('transcribing');
       try {
+        if ((await relayService('elevenlabs')) !== 'live') throw new Error('no relay');
         const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/voice/transcribe`, {
           method: 'POST',
           headers: { 'Content-Type': blob.type || 'audio/webm' },

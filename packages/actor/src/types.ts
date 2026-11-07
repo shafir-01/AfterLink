@@ -23,6 +23,7 @@ import type {
   TransferId,
 } from '@afterlink/protocol';
 import type { LinkConnector } from '@afterlink/mesh';
+import type { ActorPhase } from './gate.ts';
 import type { ActorStorage } from './storage.ts';
 
 export interface ActorOptions {
@@ -48,6 +49,10 @@ export interface PendingTransfer {
 
 export interface ActorView {
   self: { id: ActorId; team: TeamId; name: string; custodian: boolean };
+  /** Whether this device may act, and in plain words why not. */
+  phase: ActorPhase;
+  phaseReason: string | null;
+  /** Durable events only. Nothing appears here before it would survive a crash. */
   state: MissionState;
   links: LinkInfo[];
   reachable: ActorId[];
@@ -58,6 +63,7 @@ export interface ActorView {
   refusals: DecisionRecord[];
   lastDecision: DecisionRecord | null;
   horizon: Record<ActorId, number>;
+  /** Unknown peers are absent, and that includes everyone just after a restart. */
   lastHeard: Record<ActorId, number>;
   summary: SyncSummary;
   pendingTransfers: PendingTransfer[];
@@ -76,6 +82,8 @@ export interface FerryResult {
   rejected: number;
   /** Authentic events held back until the events before them arrive. */
   buffered: number;
+  /** The packet is old. Its events are still authentic and were still taken in. */
+  stale: boolean;
   /** Set when the whole packet was refused. */
   reason?: string;
 }
@@ -85,6 +93,9 @@ export interface ObserveOptions {
   validForMs?: number;
 }
 
+type Via = 'tap' | 'voice' | 'auto';
+
+/** Every command returns false when it changed nothing. `view().phase` says when the device cannot act at all. */
 export interface ActorNode {
   readonly id: ActorId;
   readonly team: TeamId;
@@ -95,18 +106,20 @@ export interface ActorNode {
   settled(): Promise<void>;
   view(): ActorView;
   subscribe(fn: (v: ActorView) => void): () => void;
-  submitTask(spec: TaskSpec, source: TaskSource): void;
-  acceptTask(id: TaskId, via?: 'tap' | 'voice' | 'auto'): boolean;
+  submitTask(spec: TaskSpec, source: TaskSource): boolean;
+  acceptTask(id: TaskId, via?: Via): boolean;
   declineTask(id: TaskId, reason: string): boolean;
-  completeTask(id: TaskId, evidence: string, via?: 'tap' | 'voice' | 'auto'): boolean;
-  offerTokens(tokens: TokenId[], to: ActorId): TransferId | null;
+  completeTask(id: TaskId, evidence: string, via?: Via): boolean;
+  /** Refuses a peer out of reach, because the right would lock in transit. `carry` means a person will take it. */
+  offerTokens(tokens: TokenId[], to: ActorId, opts?: { carry?: boolean }): TransferId | null;
   answerTransfer(transfer: TransferId, accept: boolean): boolean;
   /** Asks a holder for rights a task needs. Travels like any event, so it can wait for contact or be carried. */
   requestTransfer(resource: ResourceId, taskId: TaskId, from?: ActorId): boolean;
-  observe(key: string, value: Json, opts?: ObserveOptions): void;
+  observe(key: string, value: Json, opts?: ObserveOptions): boolean;
   setFaults(plan: FaultPlan): void;
   setSignal(c: SignalClient | null): void;
-  adoptLink(link: Link): void;
+  /** Hands an open link negotiated outside the mesh to it. */
+  adoptLink(link: Link): boolean;
   buildFerry(remote?: SyncSummary): FerryPacket;
   ingestFerry(p: FerryPacket): FerryResult;
   events(): AnyEvent[];

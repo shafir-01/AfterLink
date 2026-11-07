@@ -30,6 +30,7 @@ function cluster(keys: Keys[], wrap?: (mesh: Mesh, keys: Keys) => RelayMesh): { 
   const nodes = keys.map((k) => {
     const mesh = new Mesh({
       self: k.publicKey,
+      secretKey: k.secretKey,
       peers: keys.map((x) => x.publicKey),
       signal: net.signal(k.publicKey),
       connector: net.connector(k.publicKey),
@@ -91,12 +92,13 @@ describe('peer-relayed signalling', () => {
     net.killHub();
     await vi.waitFor(() => expect(a.mesh.signalUp).toBe(false));
     const before = c.mesh.stats().find((s) => s.peer === a.keys.publicKey)!.opens;
+    const opensAB = a.mesh.stats().find((s) => s.peer === b.keys.publicKey)!.opens;
     cut(a, b);
 
     await fullyLinked(nodes);
     expect(rtc.created).toBe(2);
     expect(c.mesh.stats().find((s) => s.peer === a.keys.publicKey)!.opens).toBe(before);
-    expect(a.mesh.stats().find((s) => s.peer === b.keys.publicKey)!.opens).toBe(2);
+    expect(a.mesh.stats().find((s) => s.peer === b.keys.publicKey)!.opens).toBe(opensAB + 1);
     expect(net.paths()).toHaveLength(2);
 
     c.mesh.setFaults({ blocked: [a.keys.publicKey, b.keys.publicKey] });
@@ -150,6 +152,7 @@ describe('peer-relayed signalling', () => {
               return mesh.signalUp;
             },
             stats: () => mesh.stats(),
+            reachable: () => mesh.reachable(),
             onMessage: (fn) => mesh.onMessage(fn),
             onLinkChange: (fn) => mesh.onLinkChange(fn),
             adopt: (l) => mesh.adopt(l),
@@ -202,8 +205,9 @@ describe('peer-relayed signalling', () => {
     const cool = { t: 'relay', id: 'under', hop: 0, from: a.keys.publicKey, to: lost };
     a.mesh.send(c.keys.publicKey, cool as unknown as WireMessage);
     a.mesh.send(c.keys.publicKey, cool as unknown as WireMessage);
+    await vi.waitFor(() => expect(seen.filter((m) => (m as RelayMessage).id === 'under')).toHaveLength(1));
     await new Promise((r) => setTimeout(r, 40));
-    expect(seen.filter((m) => (m as RelayMessage).id === 'over')).toHaveLength(0);
     expect(seen.filter((m) => (m as RelayMessage).id === 'under')).toHaveLength(1);
+    expect(seen.filter((m) => (m as RelayMessage).id === 'over')).toHaveLength(0);
   });
 });

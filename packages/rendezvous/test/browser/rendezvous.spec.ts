@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import { build } from 'esbuild';
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 import type { Rv } from './harness.ts';
 
 declare global {
@@ -169,7 +169,7 @@ test('a slow carry does not stall the link: it opens as soon as the reply is sca
   await new Promise((r) => setTimeout(r, 25_000));
   await carry(b, a, reply.frames as number);
   const done = await a.evaluate(() => window.rv.complete());
-  console.log('slow carry', JSON.stringify(done));
+  console.log('slow carry ms', done.ms);
   expect(done).toMatchObject({ ok: true });
   expect(done.ms).toBeLessThan(2000);
 });
@@ -188,7 +188,7 @@ test('no shared path fails honestly and points at the ferry', async ({ browser }
   const done = await a.evaluate(() => window.rv.complete());
   console.log('no path', JSON.stringify(done));
   expect(done).toMatchObject({ ok: false, next: 'CARRY_UPDATE', limits: { requiresSharedNetwork: true } });
-  expect(['no-shared-network', 'timeout']).toContain((done as { reason: string }).reason);
+  expect(['no-shared-network', 'timeout']).toContain((done as unknown as { reason: string }).reason);
 });
 
 test('two QR scans introduce three devices, and the third link forms through a peer with no server', async ({ browser }) => {
@@ -230,3 +230,39 @@ test('a link lost between two devices heals through the third', async ({ browser
   await expect.poll(() => b.evaluate(() => window.rv.size())).toBe(3);
   await expect.poll(() => c.evaluate(() => window.rv.size())).toBe(3);
 });
+
+for (const scanner of [false, true]) {
+  test(`two separate browser processes reconnect, ${scanner ? 'after camera permission' : 'with hidden LAN addresses'}`, async () => {
+    const server = await startServer();
+    const args = scanner ? ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] : [];
+    const browsers = await Promise.all([chromium.launch({ args }), chromium.launch({ args })]);
+    try {
+      const pages = await Promise.all(
+        browsers.map(async (b) => {
+          const context = await b.newContext({ permissions: scanner ? ['camera'] : [] });
+          const page = await context.newPage();
+          await page.goto(server.url);
+          return page;
+        }),
+      );
+      await server.stop();
+      const [a, b] = pages as [Page, Page];
+      const keys = [await a.evaluate(() => window.rv.keys()), await b.evaluate(() => window.rv.keys())];
+      const roster = keys.map((k) => k.publicKey);
+      await boot(a, { keys: keys[0]!, roster, connectMs: 15_000 });
+      await boot(b, { keys: keys[1]!, roster });
+      if (scanner) {
+        await a.evaluate(() => window.rv.camera());
+        await b.evaluate(() => window.rv.camera());
+      }
+      await a.evaluate(() => window.rv.emit(12, 'a'));
+      const { offer, reply, done } = await reconnect(a, b);
+      console.log('separate', scanner, JSON.stringify({ offer: offer.bytes, reply: reply.bytes, frames: [offer.frames, reply.frames], done: { ...done, limits: undefined } }));
+      console.log('candidates', JSON.stringify(await a.evaluate(() => window.rv.candidates())));
+      expect(done).toMatchObject({ ok: true });
+      await expect.poll(() => b.evaluate(() => window.rv.size())).toBe(12);
+    } finally {
+      await Promise.all(browsers.map((b) => b.close()));
+    }
+  });
+}

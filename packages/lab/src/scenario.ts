@@ -34,6 +34,8 @@ export interface Incident {
   spec: TaskSpec;
   /** Hands-on time once a worker starts. The same in every system. */
   durationMs: number;
+  /** Part of the issued plan: AfterLink carries it in the capsule, the baselines get it at time zero. */
+  standing?: boolean;
 }
 
 export interface Quality {
@@ -363,8 +365,10 @@ const GENERATORS: Record<FamilyId, (seed: number) => Scenario> = {
     world.contingencies = [{ id: 'gate-closed', when: { key, equals: false }, then: { blockKinds: ['through-gate'], note: 'The north gate is closed.' } }];
     const irreversible = makeTask('through-gate', { kind: 'through-gate', requires: 'mobility', priority: 1, reversible: false, reliesOn: [key] }, r);
     const reversible = makeTask('near-gate', { kind: 'access-help', requires: 'mobility', priority: 2, reversible: true, reliesOn: [key] }, r);
-    const incidents = [
+    const standing = makeTask('gate-check', { kind: 'through-gate', requires: 'mobility', priority: 3 }, r);
+    const incidents: Incident[] = [
       ...load(f),
+      { at: 0, reporter: 1, spec: standing, durationMs: duration(r), standing: true },
       { at: Math.max(askAt, flipAt + 1_000), reporter: 0, spec: irreversible, durationMs: duration(r) },
       { at: Math.max(askAt, flipAt + 1_000) + 5_000, reporter: 1, spec: reversible, durationMs: duration(r) },
     ];

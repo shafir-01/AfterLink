@@ -1,30 +1,26 @@
 import { useEffect, useRef } from 'react';
-import type { FramePixels } from '../bridge';
-import type { CarryState, Director } from './director';
+import type { StageCarry, StageController } from './contract';
 import type { Scene } from './scene';
 
 const QR_SHARE = 0.62;
-const WALK_MS = 1900;
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /** The pixels a device rendered, physically carried to the other device. */
-export function Courier({ director, scene, carry }: { director: Director; scene: Scene; carry: CarryState }) {
+export function Courier({ controller, scene, carry }: { controller: StageController; scene: Scene; carry: StageCarry }) {
   const el = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const walking = carry.phase === 'walking';
 
   useEffect(() => {
-    const draw = (p: FramePixels) => {
+    return controller.on((e) => {
       const c = canvas.current;
-      if (!c) return;
-      c.width = p.width;
-      c.height = p.height;
-      c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(p.data), p.width, p.height), 0, 0);
-    };
-    director.onFrames(draw);
-    return () => director.onFrames(null);
-  }, [director]);
+      if (e.kind !== 'frame' || !c) return;
+      c.width = e.pixels.width;
+      c.height = e.pixels.height;
+      c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(e.pixels.data), e.pixels.width, e.pixels.height), 0, 0);
+    });
+  }, [controller]);
 
   useEffect(() => {
     const host = el.current;
@@ -40,25 +36,25 @@ export function Courier({ director, scene, carry }: { director: Director; scene:
     if (!walking) return;
     if (reduced()) {
       host.style.transform = end;
-      director.carried();
+      controller.carried();
       return;
     }
     const mid = `translate(${(from.x + to.x + from.w - size) / 2}px, ${Math.min(from.y, to.y) + (from.h - size) / 2 - size * 0.14}px)`;
     const walk = host.animate([{ transform: start }, { transform: mid }, { transform: end }], {
-      duration: WALK_MS,
+      duration: carry.walkMs,
       easing: 'cubic-bezier(0.55, 0, 0.25, 1)',
       fill: 'forwards',
     });
     walk.onfinish = () => {
       host.style.transform = end;
       walk.cancel();
-      director.carried();
+      controller.carried();
     };
     return () => walk.cancel();
-  }, [walking, carry.phase, carry.sender, carry.receiver, director, scene]);
+  }, [walking, carry.phase, carry.sender, carry.receiver, carry.walkMs, controller, scene]);
 
   return (
-    <div className="st-courier" ref={el} data-phase={carry.phase} role="status" aria-label={carry.total ? `Update, part ${carry.have} of ${carry.total}` : 'Update'}>
+    <div className="st-courier" ref={el} data-phase={carry.phase} aria-hidden="true">
       <canvas ref={canvas} aria-hidden="true" />
       {carry.total > 0 && (
         <span className="st-courier-count">

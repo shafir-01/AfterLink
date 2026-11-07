@@ -48,8 +48,8 @@ describe('a valid run', () => {
     expect(v.failure).toBeNull();
     expect(v.checks.map((c) => [c.id, c.status])).toEqual([
       ['file', 'pass'],
-      ['issuer', 'pass'],
       ['signatures', 'pass'],
+      ['issuer', 'pass'],
       ['chains', 'pass'],
       ['credentials', 'pass'],
       ['causal', 'pass'],
@@ -84,6 +84,23 @@ describe('a valid run', () => {
     expect(visibility?.completed).toBe(5);
   });
 
+  it('counts what kept going, from the events alone', () => {
+    const { continuity } = verifyMission(FILE);
+    expect(continuity).toMatchObject({ completed: 5, withoutHq: 4, partitions: 1, conflictsKept: 1 });
+    expect(continuity?.unknowns.join(' ')).toMatch(/cart#2 is in transit/);
+  });
+
+  it('a group still split from the others can prove its own side', () => {
+    const run = buildRun();
+    const { medics, access } = run.peers as Record<string, Peer>;
+    medics!.emit('task.deferred', { taskId: 'stock-water', decision: medics!.decide('stock-water') });
+    access!.emit('task.deferred', { taskId: 'stock-water', decision: access!.decide('stock-water') });
+    const left = verifyMission(exportMission(medics!.log.all(), run.roster));
+    const right = verifyMission(exportMission(access!.log.all(), run.roster));
+    expect([left.ok, right.ok]).toEqual([true, true]);
+    expect(left.root).not.toBe(right.root);
+  });
+
   it('says so when the file holds no observer record', () => {
     const v = verifyMission(exportMission(base.events, base.roster));
     expect(v.ok).toBe(true);
@@ -97,7 +114,8 @@ describe('a valid run', () => {
     const say = (value: boolean) =>
       medics!.emit('observation.recorded', { observation: { key: 'hq.contact', value, subject: 'hq', observedAt: 1, validForMs: 0, source: medics!.log.byActor(run.roster.find((r) => r.team === 'medics')!.actor)[0]!.actor } });
     say(false);
-    medics!.emit('task.created', { spec: { ...run.events.find((e) => e.type === 'task.created' && e.body.spec.id === 'field-aed')!.body!.spec!, id: 'blind-aid', requires: ['first-aid'], needs: [] }, source: { kind: 'human' } } as EventBodies['task.created']);
+    const template = (run.events.find((e) => e.type === 'task.created' && e.body.spec.id === 'field-aed') as Extract<AnyEvent, { type: 'task.created' }>).body.spec;
+    medics!.emit('task.created', { spec: { ...template, id: 'blind-aid', requires: ['first-aid'], needs: [] }, source: { kind: 'human' } });
     medics!.emit('task.claimed', { taskId: 'blind-aid', decision: medics!.decide('blind-aid') });
     medics!.emit('task.completed', { taskId: 'blind-aid', evidence: 'Done', via: 'tap' });
     say(true);
@@ -144,9 +162,14 @@ describe('tampering with signed events', () => {
   });
 
   it('edited wall time, sequence, lamport or parents: fails at that exact event', () => {
-    for (const change of [(e: Record<string, unknown>) => { e.wall = 1; }, (e: Record<string, unknown>) => { (e.lamport as number) += 1; e.lamport = (e.lamport as number) + 1; }, (e: Record<string, unknown>) => { e.parents = []; }]) {
-      failedAt(verifyMission(encodeFile(edit(victim.id, change))), 'signatures', /contents do not match its hash/, victim.id);
-    }
+    const changes: ((e: Record<string, unknown>) => void)[] = [
+      (e) => { e.wall = 1; },
+      (e) => { e.seq = (e.seq as number) + 1; },
+      (e) => { e.lamport = (e.lamport as number) + 1; },
+      (e) => { e.parents = [base.events[0]!.id]; },
+      (e) => { e.mission = 'another-mission'; },
+    ];
+    for (const change of changes) failedAt(verifyMission(encodeFile(edit(victim.id, change))), 'signatures', /contents do not match its hash/, victim.id);
   });
 
   it('corrupted signature: fails at that exact event', () => {
@@ -183,13 +206,14 @@ describe('tampering with signed events', () => {
     failedAt(verifyMission(rewrite(f)), 'chains', new RegExp(`Position ${victim.seq} of this chain is missing`), next.id);
   });
 
-  it('reordered links: a chain pointing at the wrong predecessor fails', () => {
-    const keys = generateKeys();
-    const f = parsed();
-    const entry = f.roster[0]!;
-    const before = f.events.filter((e) => e.actor === entry.actor);
-    expect(before.length).toBeGreaterThan(1);
-    expect(keys.publicKey).not.toBe(entry.actor);
+  it('a chain relinked to the wrong predecessor fails at that exact event', () => {
+    const run = buildRun();
+    const peer = run.peers.medics!;
+    const keys = (peer.author as unknown as { keys: { publicKey: string; secretKey: string } }).keys;
+    const mine = peer.log.byActor(keys.publicKey);
+    const head = mine.at(-1)!;
+    const e = createEvent({ keys, mission: head.mission, seq: head.seq + 1, prev: mine[0]!.id, parents: [], lamport: head.lamport + 1, wall: 1, type: 'task.deferred', body: { taskId: 'stock-water', decision: peer.decide('stock-water') } }) as unknown as AnyEvent;
+    failedAt(verifyMission(exportMission([...peer.log.all(), e], run.roster, { hqSeen: run.hqSeen })), 'chains', /link to the previous event is broken/, e.id);
   });
 
   it('a signer that forks its own chain is caught, naming the second event', () => {
@@ -227,14 +251,12 @@ describe('tampering with signed events', () => {
 
   it('removed tail that others depend on: fails at the dependent event', () => {
     const f = parsed();
-    const dropped = base.emitted.answer!;
-    const dependent = f.events.find((e) => e.parents.includes(dropped.id))!;
-    expect(dependent).toBeDefined();
-    const later = (e: AnyEvent) => e.actor === dropped.actor && e.seq >= dropped.seq;
-    f.events = f.events.filter((e) => !later(e));
+    const dependent = f.events.filter((e) => e.parents.length > 0).at(-1)!;
+    const dropped = f.events.find((e) => e.id === dependent.parents[0])!;
+    f.events = f.events.filter((e) => !(e.actor === dropped.actor && e.seq >= dropped.seq));
     const v = verifyMission(rewrite(f));
-    expect(v.ok).toBe(false);
-    expect(v.checks.find((c) => c.status === 'fail')?.id).toBe('causal');
+    failedAt(v, 'causal', /which is not in this file/);
+    expect(v.failure?.actor).not.toBe(dropped.actor);
   });
 
   it('removed tail nobody saw: the seal catches it, and a recomputed seal still changes the fingerprint', () => {
@@ -375,16 +397,29 @@ describe('signed but unlawful history', () => {
 
   it('a transfer both accepted and declined', () => {
     const { v, e } = withEvent((r) => ({ peer: r.peers.medics!, type: 'right.declined', body: { transfer: 'cart-to-medics' } }));
-    failedAt(v, 'exclusive', /both accepted and declined/, e.id);
+    failedAt(v, 'exclusive', /answered one transfer twice/, e.id);
   });
 
   it('a transfer answered before its offer could have arrived', () => {
     const run = buildRun();
-    const { access, facilities } = run.peers as Record<string, Peer>;
-    const offer = facilities!.emit('right.offered', { transfer: 'blind-offer', tokens: ['cart#2'], to: access!.log.all()[0]!.actor });
-    expect(offer).toBeDefined();
-    const v = verifyMission(exportMission(facilities!.log.all(), run.roster, { hqSeen: run.hqSeen }));
-    expect(v.ok).toBe(false);
+    const { access, medics } = run.peers as Record<string, Peer>;
+    medics!.emit('right.offered', { transfer: 'blind-offer', tokens: ['cart#1'], to: actorOf(run, 'access') });
+    access!.emit('task.deferred', { taskId: 'stock-water', decision: access!.decide('stock-water') });
+    const answer = access!.emit('right.accepted', { transfer: 'blind-offer' });
+    const v = verifyMission(exportMission([...medics!.log.all(), ...access!.log.all()], run.roster, { hqSeen: run.hqSeen }));
+    failedAt(v, 'exclusive', /an offer it had not received/, answer.id);
+  });
+
+  it('a right spent before its return could have been seen', () => {
+    const run = buildRun();
+    const { access, medics } = run.peers as Record<string, Peer>;
+    medics!.emit('right.offered', { transfer: 'bounced', tokens: ['cart#1'], to: actorOf(run, 'access') });
+    run.sync('medics', 'access');
+    access!.emit('right.declined', { transfer: 'bounced' });
+    medics!.emit('task.deferred', { taskId: 'stock-water', decision: medics!.decide('stock-water') });
+    const spent = medics!.emit('right.committed', { tokens: ['cart#1'], taskId: 'stock-water' });
+    const v = verifyMission(exportMission([...medics!.log.all(), ...access!.log.all()], run.roster, { hqSeen: run.hqSeen }));
+    failedAt(v, 'exclusive', /before it could know it held it/, spent.id);
   });
 
   it('a task completed by a team that never took it', () => {
@@ -395,6 +430,59 @@ describe('signed but unlawful history', () => {
   it('a task nobody created', () => {
     const { v, e } = withEvent((r) => ({ peer: r.peers.medics!, type: 'task.accepted', body: { taskId: 'ghost', via: 'tap' } }));
     failedAt(v, 'authority', /does not exist/, e.id);
+  });
+
+  it('a right spent on a task that does not exist', () => {
+    const { v, e } = withEvent((r) => ({ peer: r.peers.medics!, type: 'right.committed', body: { tokens: ['aed#1'], taskId: 'ghost' } }));
+    failedAt(v, 'authority', /does not exist/, e.id);
+  });
+
+  it('the issuer acting in the field', () => {
+    const run = buildRun();
+    const genesis = run.events[0]!;
+    const log = run.peers.medics!.log;
+    const e = createEvent({ keys: run.issuer, mission: genesis.mission, seq: 2, prev: genesis.id, parents: log.heads(), lamport: log.lamport() + 1, wall: 2, type: 'task.claimed', body: { taskId: 'stock-water', decision: run.peers.medics!.decide('stock-water') } }) as unknown as AnyEvent;
+    const v = verifyMission(exportMission([...run.events, e], run.roster, { hqSeen: run.hqSeen }));
+    failedAt(v, 'authority', /not on the roster/, e.id);
+  });
+
+  it('a right released with its task can be spent again, and the task no longer counts it', () => {
+    const run = buildRun();
+    const { medics } = run.peers as Record<string, Peer>;
+    const template = (run.events.find((x) => x.type === 'task.created' && x.body.spec.id === 'field-aed') as Extract<AnyEvent, { type: 'task.created' }>).body.spec;
+    const job = (id: string) => ({ spec: { ...template, id, requires: ['first-aid'] }, source: { kind: 'human' as const } });
+    medics!.emit('task.created', job('first-job'));
+    medics!.emit('task.created', job('second-job'));
+    medics!.emit('right.committed', { tokens: ['aed#1'], taskId: 'first-job' });
+    medics!.emit('task.claimed', { taskId: 'first-job', decision: medics!.decide('first-job') });
+    medics!.emit('task.released', { taskId: 'first-job', reason: 'Handing it back' });
+    medics!.emit('right.committed', { tokens: ['aed#1'], taskId: 'second-job' });
+    medics!.emit('task.claimed', { taskId: 'second-job', decision: medics!.decide('second-job') });
+    medics!.emit('task.accepted', { taskId: 'second-job', via: 'tap' });
+    const lawful = verifyMission(exportMission(medics!.log.all(), run.roster, { hqSeen: run.hqSeen }));
+    expect(lawful.failure).toBeNull();
+    expect(lawful.ok).toBe(true);
+
+    medics!.emit('task.claimed', { taskId: 'first-job', decision: medics!.decide('first-job') });
+    const back = medics!.emit('task.accepted', { taskId: 'first-job', via: 'tap' });
+    const v = verifyMission(exportMission(medics!.log.all(), run.roster, { hqSeen: run.hqSeen }));
+    expect(v.ok).toBe(false);
+    expect(v.checks.find((c) => c.id === 'authority')?.findings.map((f) => f.event)).toContain(back.id);
+  });
+
+  it('a stuck transfer ruled on by the issuer, and by nobody else', () => {
+    const run = buildRun();
+    const { medics } = run.peers as Record<string, Peer>;
+    const log = medics!.log;
+    const genesis = run.events[0]!;
+    const body = { conflictId: 'stuck', resolution: 'Back to Facilities', keep: [], tokenHolder: { tokenId: 'cart#2', holder: run.roster.find((r) => r.team === 'facilities')!.actor } };
+    const ruling = createEvent({ keys: run.issuer, mission: genesis.mission, seq: 2, prev: genesis.id, parents: log.heads(), lamport: log.lamport() + 1, wall: 2, type: 'conflict.resolved', body }) as unknown as AnyEvent;
+    const lawful = verifyMission(exportMission([...log.all(), ruling], run.roster, { hqSeen: run.hqSeen }));
+    expect(lawful.ok).toBe(true);
+    expect(lawful.checks.find((c) => c.id === 'conservation')?.detail).toBe('5 issued: 2 committed, 3 held, 0 in transit');
+
+    const usurper = medics!.emit('conflict.resolved', body);
+    failedAt(verifyMission(exportMission(log.all(), run.roster, { hqSeen: run.hqSeen })), 'exclusive', /without the authority/, usurper.id);
   });
 
   it('a task taken without the skill', () => {

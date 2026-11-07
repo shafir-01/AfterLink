@@ -2,12 +2,14 @@ export { encodeFile, exportMission, FILE_EXTENSION, FORMAT, rosterFrom, sealOf, 
 export { fingerprintWords, missionFingerprint, missionHeads, type ActorHead } from './fingerprint.ts';
 export { tamperByte, type Tamper } from './tamper.ts';
 export {
+  HQ_CONTACT_KEY,
   verifyMission,
   verifySteps,
   type BlindTask,
   type Check,
   type CheckId,
   type CheckStatus,
+  type Continuity,
   type Finding,
   type Step,
   type Verdict,

@@ -8,4 +8,5 @@ export {
   type Refusal,
   type Verdict,
 } from './gate.ts';
-export { conservation } from './conservation.ts';
+export { conservation, type ConservationRow } from './conservation.ts';
+export { auditRights, type RightsAudit } from './audit.ts';

@@ -27,30 +27,47 @@
   transition: background-color var(--dur-fast) var(--ease-out);
 }
 
-.al-provision__team:hover {
-  background: var(--bg-subtle);
-}
-
+.al-provision__team:hover,
 .al-provision__team[aria-pressed='true'] {
   background: var(--bg-subtle);
-}
-
-.al-provision__team[aria-pressed='true'] .al-badge {
-  color: var(--fg);
 }
 
 .al-provision__team .al-badge {
   font-size: var(--text-label);
 }
 
-.al-provision__code {
-  width: 100%;
-  height: auto;
-  border-radius: var(--radius-m);
-  background: #ffffff;
-  image-rendering: pixelated;
+.al-provision__team[aria-pressed='true'] .al-badge {
+  color: var(--fg);
 }
 
-.al-provision__code[hidden] {
-  display: none;
+.al-provision__code {
+  display: grid;
+  justify-items: center;
+  width: 100%;
+}
+
+.al-provision__code canvas {
+  max-width: none;
+  border-radius: var(--radius-s);
+}
+
+@media (min-width: 60rem) {
+  .al-provision {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-8);
+    max-width: none;
+    min-height: 100dvh;
+    padding: var(--space-5);
+  }
+
+  .al-provision__side {
+    flex: 0 1 24rem;
+  }
+
+  .al-provision__code {
+    flex: none;
+    width: min(calc(100dvh - var(--space-7)), 46rem);
+  }
 }

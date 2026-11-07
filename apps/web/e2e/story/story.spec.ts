@@ -20,11 +20,15 @@ test('the whole story through the real UI, checked against real browser state an
   const errors: string[] = [];
   const foreign: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  const origin = new URL(baseURL!).host;
   page.on('request', (r) => {
-    const url = r.url();
-    if (!url.startsWith(baseURL!) && !/^(data|blob):/.test(url)) foreign.push(url);
+    const url = new URL(r.url());
+    if (url.host === origin || /^(data|blob):/.test(r.url()) || url.pathname.startsWith('/api/voice/')) return;
+    foreign.push(r.url());
   });
-  page.on('websocket', (ws) => foreign.push(ws.url()));
+  page.on('websocket', (ws) => {
+    if (new URL(ws.url()).host !== origin) foreign.push(ws.url());
+  });
 
   const evidence: Record<string, unknown> = {};
 
@@ -265,12 +269,22 @@ test('the whole story through the real UI, checked against real browser state an
   });
 
   await test.step('debrief: the numbers on screen match the logs', async () => {
-    const logs = await stage.allLogs();
-    const events = Object.values(logs)[0]!;
+    const footer = await page.locator('.st-counters').innerText();
+    const stageDone = Number(footer.match(/Finished\s*(\d+)/)![1]);
+    const stageRefused = Number(footer.match(/Refused\s*(\d+)/)![1]);
+    const hqLine = await stage.statusLine();
+    const hqLearned = Number(hqLine.match(/learned (\d+)/)?.[1] ?? NaN);
+    const conflictsOnDevices = Object.values(await stage.views()).map((v) => v.conflicts.length);
+
     await stage.primary('See what happened').click();
     await page.waitForURL(/#\/debrief/, { timeout: 15_000 });
     const facts = page.getByRole('region', { name: 'Key facts' });
     await expect(facts).toBeVisible({ timeout: 15_000 });
+
+    const input = await stage.debriefInput();
+    expect(input, 'the stage saved what it handed to the debrief').toBeTruthy();
+    const { events, hqSeen } = input!;
+    const hq = new Set(hqSeen);
 
     const texts = await facts.locator('> div').allInnerTexts();
     const read = (label: RegExp) => {
@@ -279,18 +293,33 @@ test('the whole story through the real UI, checked against real browser state an
       return Number(hit.match(/\d+/)![0]);
     };
 
-    const refusedInLog = new Set(events.filter((e) => e.type === 'task.refused').map((e) => e.body.taskId)).size;
-    const blindDone = events.filter((e) => e.type === 'task.completed' && e.wall >= killedAt).length;
-    evidence.debrief = { texts, refusedInLog, blindDone, total: events.length };
+    const SAFETY = new Set(['NO_RIGHT', 'TOKEN_IN_TRANSIT', 'STALE_KNOWLEDGE', 'HUMAN_APPROVAL_REQUIRED']);
+    const refusals = events.filter((e) => e.type === 'task.refused');
+    const key = (e: (typeof refusals)[number]) => (e.type === 'task.refused' ? `${e.actor}|${e.body.taskId}|${e.body.decision.refusal}` : '');
+    const safety = new Set(refusals.filter((e) => e.type === 'task.refused' && SAFETY.has(e.body.decision.refusal ?? '')).map(key));
+    const rightOrTransit = new Set(refusals.filter((e) => e.type === 'task.refused' && ['NO_RIGHT', 'TOKEN_IN_TRANSIT'].includes(e.body.decision.refusal ?? '')).map(key));
+    const completed = events.filter((e) => e.type === 'task.completed');
+    const blindDone = new Set(completed.filter((e) => !hq.has(e.id)).map((e) => (e.type === 'task.completed' ? e.body.taskId : ''))).size;
+    const doneTasks = new Set(completed.map((e) => (e.type === 'task.completed' ? e.body.taskId : ''))).size;
 
-    expect(read(/refused/i)).toBe(refusedInLog);
-    expect(read(/done while blind/i)).toBeGreaterThan(0);
-    expect(read(/done while blind/i)).toBeLessThanOrEqual(blindDone);
+    const onScreen = { blind: read(/done while blind/i), refused: read(/refused/i), prevented: read(/duplicates prevented/i), conflicts: read(/conflicts?$/i) };
+    const fromLogs = { blind: blindDone, refused: safety.size, prevented: rightOrTransit.size };
+    evidence.debrief = { texts, footer, hqLine, onScreen, fromLogs, doneTasks, conflictsOnDevices, events: events.length, hqSeen: hqSeen.length };
+    console.log(JSON.stringify({ debrief: evidence.debrief }));
+
+    expect({ blind: onScreen.blind, refused: onScreen.refused, prevented: onScreen.prevented }).toEqual(fromLogs);
+    expect(onScreen.blind, 'work really happened while HQ was blind').toBeGreaterThan(0);
+    expect(onScreen.refused, 'the contested chair shows as a refusal').toBeGreaterThan(0);
+    expect(stageRefused, 'stage counter agrees with the debrief').toBe(onScreen.refused);
+    expect(stageDone, 'stage counter agrees with the log').toBe(doneTasks);
+    expect(hqLearned, 'the HQ line states a real count').toBeGreaterThan(0);
+    expect(new Set(conflictsOnDevices).size, 'all devices count the same conflicts').toBe(1);
+    expect(onScreen.conflicts, 'debrief agrees with the devices on conflicts').toBe(conflictsOnDevices[0]);
   });
 
   console.log(JSON.stringify({ project: info.project.name, evidence }));
   expect(errors, 'no uncaught page errors during the run').toEqual([]);
-  expect(foreign, 'the solo demo must not touch anything but its own origin').toEqual([]);
+  expect(foreign, 'apart from the optional voice cache, the solo demo reaches nothing but its own origin').toEqual([]);
 });
 
 const probeSpec = {

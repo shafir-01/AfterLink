@@ -1,9 +1,10 @@
 export { Badge } from './Badge';
 export { Button } from './Button';
-export { guardedView, Unavailable, ViewBoundary } from './guarded';
+export { guardedView, Notice, ViewBoundary } from './guarded';
 export * from './motion';
 export { navigate, parseRoute, useRoute, type Route, type RouteName } from './route';
 export { Sheet } from './Sheet';
+export { SkipLink } from './SkipLink';
 export { Stack, type Space } from './Stack';
 export { teamColor } from './team';
 export { Text, type TextTone, type TextVariant } from './Text';

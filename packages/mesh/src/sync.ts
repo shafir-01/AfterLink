@@ -58,11 +58,22 @@ interface PeerSync {
   batchAt: number | null;
   /** When we last sent this peer a summary. */
   summaryAt: number;
+  /**
+   * Events sent in this pass that the peer has not yet shown it holds. A delta can start with events
+   * the peer has but cannot be proved to have, as after a fork, so each batch must move past the last.
+   */
+  offered: Set<EventId>;
+  /** No new pass starts before this time. */
+  holdUntil: number;
+  /** Wait before the next pass, doubled while the peer shows nothing new. */
+  passWaitMs: number;
 }
 
 const TASK_PRIORITY_DEFAULT = 2;
 /** A peer sending more than this in one message is not following the protocol. */
 const MAX_INBOUND_EVENTS = 512;
+/** Longest wait between passes offering a peer events it never shows. */
+const MAX_PASS_WAIT_MS = 60_000;
 
 const tipsOf = (s: LogSummary, actor: ActorId): EventId[] => {
   const head = s.heads[actor];
@@ -178,6 +189,7 @@ export function attachSync(
   };
   let flushTimer: unknown = null;
   let gossipTimer: unknown = null;
+  let lastAddedAt = -Infinity;
 
   const noteTasks = (events: AnyEvent[]) => {
     for (const e of events) {
@@ -197,12 +209,25 @@ export function attachSync(
   const push = (peer: ActorId, state: PeerSync) => {
     if (!state.known) return;
     const now = clock.now();
+    if (now < state.holdUntil) return;
     if (state.batchAt !== null && now - state.batchAt < ackTimeoutMs) return;
     const delta = log.missingFor(state.known);
+    // An unanswered batch may have been lost, so the pass restarts from what the peer has shown.
+    if (state.batchAt !== null) state.offered.clear();
     state.batchAt = null;
-    if (delta.length === 0) return;
-    noteTasks(delta);
-    const ordered = prioritise(delta, rank);
+    if (delta.length === 0) {
+      state.offered.clear();
+      return;
+    }
+    const fresh = delta.filter((e) => !state.offered.has(e.id));
+    if (fresh.length === 0) {
+      state.offered.clear();
+      state.holdUntil = now + state.passWaitMs;
+      state.passWaitMs = Math.min(state.passWaitMs * 2, MAX_PASS_WAIT_MS);
+      return;
+    }
+    noteTasks(fresh);
+    const ordered = prioritise(fresh, rank);
     const batch: AnyEvent[] = [];
     let bytes = 0;
     for (const e of ordered) {
@@ -212,6 +237,7 @@ export function attachSync(
     }
     if (mesh.send(peer, { t: 'events', events: batch, final: batch.length === ordered.length })) {
       state.batchAt = now;
+      for (const e of batch) state.offered.add(e.id);
       stats.batchesSent++;
       stats.eventsSent += batch.length;
     }
@@ -246,12 +272,16 @@ export function attachSync(
   const onSummary = (peer: ActorId, state: PeerSync, raw: unknown) => {
     const remote = parseSummary(raw, mission);
     if (!remote) return;
-    if (learn(state, remote)) state.batchAt = null;
+    if (learn(state, remote)) {
+      state.holdUntil = 0;
+      state.passWaitMs = ackTimeoutMs;
+    }
+    state.batchAt = null;
     push(peer, state);
     if (holdsWhatWeLack(remote) && clock.now() - state.summaryAt >= askGapMs) sendSummary(peer);
   };
 
-  const onEvents = (peer: ActorId, events: AnyEvent[]) => {
+  const onEvents = (peer: ActorId, events: AnyEvent[], final: boolean) => {
     if (!Array.isArray(events)) return;
     if (events.length > MAX_INBOUND_EVENTS) {
       stats.batchesRefused++;
@@ -269,9 +299,13 @@ export function attachSync(
       onNew(result.added, peer);
       scheduleGossip(peer);
     }
-    // A batch of pure duplicates earns no answer: its sender pauses while the peer that is
-    // actually delivering carries on, which keeps a reconnect from turning into parallel floods.
-    if (result.added.length > 0 || result.gaps > 0) sendSummary(peer);
+    // Pure duplicates earn no answer while another peer is delivering: this sender pauses and the
+    // one making progress carries on, so a reconnect does not become parallel floods. With nobody
+    // delivering, the answer lets a sender walk past events we hold towards what we lack.
+    const now = clock.now();
+    if (result.added.length > 0) lastAddedAt = now;
+    const useful = result.added.length > 0 || result.gaps > 0;
+    if (useful || (!final && now - lastAddedAt >= askGapMs)) sendSummary(peer);
   };
 
   const scheduleGossip = (except: ActorId) => {
@@ -293,7 +327,14 @@ export function attachSync(
   };
 
   const linkOpened = (peer: ActorId) => {
-    peers.set(peer, { known: null, batchAt: null, summaryAt: -Infinity });
+    peers.set(peer, {
+      known: null,
+      batchAt: null,
+      summaryAt: -Infinity,
+      offered: new Set(),
+      holdUntil: 0,
+      passWaitMs: ackTimeoutMs,
+    });
     sendSummary(peer);
   };
 
@@ -301,7 +342,7 @@ export function attachSync(
     const state = peers.get(peer);
     if (!state) return;
     if (msg.t === 'summary') onSummary(peer, state, msg.summary);
-    else if (msg.t === 'events') onEvents(peer, msg.events);
+    else if (msg.t === 'events') onEvents(peer, msg.events, msg.final);
   });
 
   const offLink = mesh.onLinkChange((info: LinkInfo) => {

@@ -1,6 +1,7 @@
 import type { MissionCapsule } from '@afterlink/protocol';
 import { clipKey, createClipStore, type ClipStore } from './clipStore.ts';
 import { packItems } from './phrases.ts';
+import { relayBase, relayService } from '../relay.ts';
 
 export type ClipSource = 'cached' | 'live';
 /** captioned: nothing could be played, the caption is all there is. */
@@ -56,28 +57,28 @@ export interface VoicePackOptions {
   store?: ClipStore;
   player?: Player;
   fetchImpl?: typeof fetch;
+  /** Whether the relay can synthesise at all. Asked before every live request. */
+  available?: () => Promise<boolean>;
 }
 
-const envBase = (): string => {
-  try {
-    return (import.meta as { env?: Record<string, string> }).env?.VITE_RELAY_URL ?? '';
-  } catch {
-    return '';
-  }
-};
+/** After a refused request the pack stops asking for a while, so a failing provider costs one call, not one per clip. */
+const PAUSE_AFTER_FAILURE_MS = 60_000;
 
 export class VoicePack {
   private base: string;
   private store: ClipStore;
   private player: Player;
   private doFetch: typeof fetch;
+  private available: () => Promise<boolean>;
+  private pausedUntil = 0;
   private gen = 0;
 
   constructor(o: VoicePackOptions = {}) {
-    this.base = (o.baseUrl ?? envBase()).replace(/\/$/, '');
+    this.base = (o.baseUrl ?? relayBase()).replace(/\/$/, '');
     this.store = o.store ?? createClipStore();
     this.player = o.player ?? browserPlayer();
     this.doFetch = o.fetchImpl ?? ((...a) => fetch(...a));
+    this.available = o.available ?? (async () => (await relayService('elevenlabs')) === 'live');
   }
 
   get persistent() {
@@ -93,19 +94,20 @@ export class VoicePack {
     const key = clipKey(role, text);
     const hit = await this.store.get(key);
     if (hit) return { blob: hit, source: 'cached' };
-    if (!online) return null;
+    if (!online || Date.now() < this.pausedUntil || !(await this.available())) return null;
     try {
       const res = await this.doFetch(`${this.base}/api/voice/brief`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, role }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) throw new Error(String(res.status));
       const blob = await res.blob();
       if (!blob.size) return null;
       await this.store.put(key, blob);
       return { blob, source: 'live' };
     } catch {
+      this.pausedUntil = Date.now() + PAUSE_AFTER_FAILURE_MS;
       return null;
     }
   }
@@ -142,7 +144,7 @@ export class VoicePack {
     let next = 0;
     const worker = async () => {
       while (next < items.length) {
-        const item = items[next++];
+        const item = items[next++]!;
         const c = await this.clip(item.text, item.role, online);
         if (c) p.done++;
         else p.failed++;

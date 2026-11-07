@@ -53,7 +53,7 @@ export function sha256(data: string | Uint8Array): string {
 
 /** Pass a 32-byte seed for reproducible identities. */
 export function generateKeys(seed?: Uint8Array): KeyPair {
-  const { secretKey, publicKey } = ed25519.keygen(seed?.slice());
+  const { secretKey, publicKey } = ed25519.keygen(seed);
   return { publicKey: b64u(publicKey), secretKey: b64u(secretKey) };
 }
 
@@ -61,6 +61,7 @@ export function signBytes(secretKey: string, data: Uint8Array): string {
   return b64u(ed25519.sign(data, fromB64u(secretKey)));
 }
 
+/** Strict RFC 8032 mode: the default would let a small-order key verify any message under one signature. */
 export function verifyBytes(publicKey: ActorId, data: Uint8Array, sig: string): boolean {
   try {
     return ed25519.verify(fromB64u(sig), data, fromB64u(publicKey), { zip215: false });

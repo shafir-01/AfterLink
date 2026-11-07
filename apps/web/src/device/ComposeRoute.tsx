@@ -28,10 +28,16 @@ export default function ComposeRoute() {
     navigate('/lead');
   };
 
-  if (!issuer) return null;
   return (
-    <Suspense fallback={null}>
-      <Compose onApprove={(capsule) => void approve(capsule)} issuer={issuer} />
-    </Suspense>
+    <>
+      <header>
+        <h1 className="al-visually-hidden">Compose a mission</h1>
+      </header>
+      {issuer ? (
+        <Suspense fallback={null}>
+          <Compose onApprove={(capsule) => void approve(capsule)} issuer={issuer} />
+        </Suspense>
+      ) : null}
+    </>
   );
 }

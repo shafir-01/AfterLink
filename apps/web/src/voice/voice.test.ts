@@ -52,7 +52,7 @@ describe('VoicePack', () => {
   let fetches = 0;
   const mk = (ok = true) =>
     new VoicePack({
-      store: memoryStore(), player,
+      store: memoryStore(), player, available: async () => true,
       fetchImpl: (async () => { fetches++; return ok ? new Response(new Blob([new Uint8Array([1, 2])], { type: 'audio/mpeg' })) : new Response('', { status: 503 }); }) as typeof fetch,
     });
 
@@ -72,8 +72,8 @@ describe('VoicePack', () => {
   it('speaks a refusal from segments, and falls back to captions when nothing is cached offline', async () => {
     const p = mk();
     const parts = refusalSegments('NO_RIGHT', { resource: 'evac-chair', team: 'Supply' });
-    await p.clip(parts[0], 'medics', true);
-    await p.clip(parts[1], 'medics', true);
+    await p.clip(parts[0]!, 'medics', true);
+    await p.clip(parts[1]!, 'medics', true);
     played.length = 0;
     const r = await p.speakSequence(parts, 'medics', false);
     expect(r.source).toBe('cached');
@@ -84,5 +84,17 @@ describe('VoicePack', () => {
   });
   it('captions only when the provider is down and nothing is cached', async () => {
     expect((await mk(false).speak('Hello there', 'medics', true)).source).toBe('captioned');
+  });
+  it('asks a failing provider a few times, not once per clip', async () => {
+    const before = fetches;
+    const r = await mk(false).prepare(capsule, 'medics', true);
+    expect(r.done).toBe(0);
+    expect(fetches - before).toBeLessThanOrEqual(3);
+  });
+  it('sends nothing when the relay has no voice service', async () => {
+    let sent = 0;
+    const p = new VoicePack({ store: memoryStore(), player, available: async () => false, fetchImpl: (async () => { sent++; return new Response(''); }) as typeof fetch });
+    expect((await p.speak('Hello there', 'medics', true)).source).toBe('captioned');
+    expect(sent).toBe(0);
   });
 });

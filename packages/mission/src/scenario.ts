@@ -175,7 +175,7 @@ export const scenarioBeats: DemoBeat[] = [
     id: 'hq-down-quiet-tent',
     step: 'hq-down',
     team: 'supply',
-    label: 'A visitor needs the quiet tent. No central service, so peers pick it up.',
+    label: 'A visitor needs the quiet tent. HQ is gone, so the teams sort it out.',
     spec: task('guide-quiet-tent', 'visitor-help', 'Guide a visitor to the quiet tent', 'A visitor is overwhelmed at the food court. Walk with them to the quiet tent.', SITE.quietTent, {
       objective: 'access',
       priority: 2,
@@ -198,7 +198,7 @@ export const scenarioBeats: DemoBeat[] = [
     id: 'split-field-aed',
     step: 'split',
     team: 'supply',
-    label: 'Medics and Supply put the spare AED on the sports field.',
+    label: 'The sports field needs the spare AED.',
     spec: task('field-aed', 'supply-run', 'Take the spare AED to the sports field', 'Take the spare AED to the sports field and tell the stewards where it is.', SITE.sportsField, {
       objective: 'safety',
       priority: 2,
@@ -210,7 +210,7 @@ export const scenarioBeats: DemoBeat[] = [
     id: 'split-hall-ramp',
     step: 'split',
     team: 'facilities',
-    label: 'Access and Facilities fix the sports hall ramp.',
+    label: 'The sports hall ramp has come loose.',
     spec: task('hall-ramp', 'repair', 'Fix the sports hall ramp', 'The ramp at the sports hall has come loose. Bring the cart and fix it.', SITE.sportsHall, {
       objective: 'access',
       priority: 2,
@@ -235,7 +235,7 @@ export const scenarioBeats: DemoBeat[] = [
     id: 'contested-hall-chair',
     step: 'contested',
     team: 'access',
-    label: 'Access holds the chair and uses it at the sports hall.',
+    label: 'The sports hall lift has stopped. Access has the chair.',
     spec: task('hall-chair', 'evacuation', 'Help a wheelchair user out of the sports hall', 'The sports hall lift has stopped. Use the evacuation chair to bring a wheelchair user down.', SITE.sportsHall, {
       objective: 'safety',
       priority: 1,

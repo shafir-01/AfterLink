@@ -1,6 +1,13 @@
+import { bodyError } from './body.ts';
 import { canonicalize } from './canonical.ts';
 import { fromB64u, sha256, signBytes, verifyBytes, type KeyPair } from './crypto.ts';
 import type { AnyEvent, EventBodies, EventEnvelope, EventId, EventType, MissionId } from './types.ts';
+
+/** Largest canonical event accepted from a peer. */
+export const MAX_EVENT_BYTES = 16 * 1024;
+/** A mission capsule is the one legitimately large event, and there is one per mission. */
+export const MAX_GENESIS_BYTES = 256 * 1024;
+export const MAX_PARENTS = 256;
 
 export interface EventDraft<T extends EventType> {
   keys: KeyPair;
@@ -20,6 +27,8 @@ export type Verdict = { ok: true } | { ok: false; reason: string };
 const verified = new Set<string>();
 const VERIFIED_LIMIT = 1 << 16;
 
+const utf8 = new TextEncoder();
+
 export function eventId(unsigned: object): EventId {
   return sha256(canonicalize(unsigned));
 }
@@ -38,7 +47,10 @@ function shapeError(u: Record<string, unknown>): string | null {
   return null;
 }
 
-/** The returned event is exactly what every peer will decode: its body is normalised through the canonical form. */
+/**
+ * The returned event is exactly what every peer will decode: its body is normalised through
+ * the canonical form. Contract rules on type, body and size are enforced by `verifyEvent`.
+ */
 export function createEvent<T extends EventType>(a: EventDraft<T>): EventEnvelope<T> {
   const unsigned = JSON.parse(
     canonicalize({
@@ -64,10 +76,15 @@ export function createEvent<T extends EventType>(a: EventDraft<T>): EventEnvelop
 export function verifyEvent(e: AnyEvent): Verdict {
   try {
     const { id, sig, ...unsigned } = e;
-    const problem = shapeError(unsigned);
+    const problem = shapeError(unsigned) ?? bodyError(e.type, e.body);
     if (problem) return { ok: false, reason: problem };
+    if (e.parents.length > MAX_PARENTS) return { ok: false, reason: 'too many parents' };
     if (typeof id !== 'string' || typeof sig !== 'string') return { ok: false, reason: 'missing id or signature' };
-    if (eventId(unsigned) !== id) return { ok: false, reason: 'id does not match content' };
+    const bytes = utf8.encode(canonicalize(unsigned));
+    if (bytes.length > (e.type === 'mission.issued' ? MAX_GENESIS_BYTES : MAX_EVENT_BYTES)) {
+      return { ok: false, reason: 'event too large' };
+    }
+    if (sha256(bytes) !== id) return { ok: false, reason: 'id does not match content' };
     const entry = `${id}.${sig}`;
     if (verified.has(entry)) return { ok: true };
     if (!verifyBytes(e.actor, fromB64u(id), sig)) return { ok: false, reason: 'bad signature' };

@@ -201,6 +201,7 @@ export async function createApp(ctx: RelayContext, opts: { webDist?: string } = 
           return c.body(new Uint8Array(await readFile(abs)), 200, {
             'content-type': MIME[extname(abs)] ?? 'application/octet-stream',
             'cache-control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
+            'x-afterlink-relay': '1',
           });
         }
       } catch {

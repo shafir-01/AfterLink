@@ -32,6 +32,7 @@ export interface RelayMessage {
 export interface RelayMesh {
   readonly signalUp: boolean;
   stats(): { peer: ActorId; state: LinkInfo['state']; blocked: boolean }[];
+  reachable(): ActorId[];
   send(peer: ActorId, msg: WireMessage): boolean;
   onMessage(fn: (peer: ActorId, msg: WireMessage) => void): () => void;
   onLinkChange(fn: (info: LinkInfo) => void): () => void;
@@ -102,7 +103,8 @@ export class RelayedSignal {
       }),
       this.mesh.onLinkChange((info) => {
         if (info.state === 'open') {
-          this.backoff.delete(info.peer);
+          // A new neighbour is a new route, so earlier failed seeks are worth repeating at once.
+          this.backoff.clear();
           this.attempts.get(info.peer)?.close();
           this.attempts.delete(info.peer);
         }
@@ -122,17 +124,17 @@ export class RelayedSignal {
     this.attempts.clear();
   }
 
+  /** A link open but silent counts as lost: the far end may be gone, or asking us for a new one. */
   private linkable(peer: ActorId): boolean {
     const s = this.mesh.stats().find((x) => x.peer === peer);
-    return !!s && !s.blocked && s.state !== 'open' && s.state !== 'connecting';
+    return !!s && !s.blocked && s.state !== 'connecting' && !this.mesh.reachable().includes(peer);
   }
 
   /** Signalling up means the mesh heals itself; a device with no links has nobody to ask. */
   private scan(): void {
     if (this.timer === null || this.mesh.signalUp) return;
-    const stats = this.mesh.stats();
-    if (!stats.some((s) => s.state === 'open')) return;
-    for (const s of stats) {
+    if (!this.mesh.reachable().length) return;
+    for (const s of this.mesh.stats()) {
       if (this.linkable(s.peer) && !this.attempts.has(s.peer)) this.seek(s.peer);
     }
   }
@@ -148,22 +150,31 @@ export class RelayedSignal {
 
   private dispatch(to: ActorId, data?: string): void {
     const id = sha256(`${this.self}|${to}|${++this.count}|${this.now()}`).slice(0, 16);
-    this.seen.add(id);
+    this.remember(id);
     this.forward({ t: 'relay', id, hop: 0, from: this.self, to, data });
   }
 
+  private remember(id: string): void {
+    this.seen.add(id);
+    if (this.seen.size > SEEN_LIMIT) this.seen.delete(this.seen.values().next().value!);
+  }
+
+  /** Straight to the addressee when it is a live neighbour, otherwise to every other live neighbour. */
   private forward(m: RelayMessage, via?: ActorId): void {
     const wire = m as unknown as WireMessage;
-    if (this.mesh.send(m.to, wire)) return;
-    for (const s of this.mesh.stats()) {
-      if (s.state === 'open' && s.peer !== via && s.peer !== m.from) this.mesh.send(s.peer, wire);
+    const live = this.mesh.reachable();
+    if (live.includes(m.to)) {
+      this.mesh.send(m.to, wire);
+      return;
+    }
+    for (const peer of live) {
+      if (peer !== via && peer !== m.from) this.mesh.send(peer, wire);
     }
   }
 
   private receive(via: ActorId, m: RelayMessage): void {
     if (typeof m.id !== 'string' || this.seen.has(m.id)) return;
-    this.seen.add(m.id);
-    if (this.seen.size > SEEN_LIMIT) this.seen.delete(this.seen.values().next().value!);
+    this.remember(m.id);
     if (m.to !== this.self) {
       if (m.hop + 1 <= this.maxHops) this.forward({ ...m, hop: m.hop + 1 }, via);
       return;
@@ -173,11 +184,11 @@ export class RelayedSignal {
     else this.onSeek(m.from);
   }
 
-  /** The lower id offers, as it dials in the mesh. The higher id seeks back so the lower id learns of it. */
+  /** The lower id offers, as it dials in the mesh. The higher id replies so the lower id learns of it; offers end the exchange. */
   private onSeek(from: ActorId): void {
     if (this.attempts.has(from)) return;
     if (this.self < from) void this.offer(from);
-    else this.seek(from);
+    else this.dispatch(from);
   }
 
   private async offer(peer: ActorId): Promise<void> {

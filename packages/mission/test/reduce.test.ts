@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { canonicalize, createEvent, generateKeys } from '@afterlink/protocol';
+import { Author, canonicalize, createEvent, EventLog, generateKeys } from '@afterlink/protocol';
 import type { AnyEvent, MissionState } from '@afterlink/protocol';
-import { claimRank, reduce } from '../src/index.ts';
+import { claimRank, isTaskDone, reduce } from '../src/index.ts';
 import { accept, claim, complete, cover, create, decision, spec, stateOf, sync, world, type Device } from './helpers.ts';
 
 const same = (a: MissionState, b: MissionState) => canonicalize(a) === canonicalize(b);
@@ -385,10 +385,6 @@ describe('rejection as data', () => {
       create(w.supply, spec('a', { title: 'Something else' }));
       return { reader: w.supply, check: (s) => expect(s.tasks.a?.spec.title).toBe('Task a') };
     }],
-    ['a task that cannot be read', (w) => {
-      create(w.supply, { id: 'bad' } as never);
-      return { reader: w.supply, check: (s) => expect(s.tasks.bad).toBeUndefined() };
-    }],
   ];
 
   it.each(cases)('rejects %s without throwing', (_name, play) => {
@@ -398,6 +394,14 @@ describe('rejection as data', () => {
     check(s);
     expect(conflictsOf(s, 'unauthorised-action')).toHaveLength(1);
     expect(s.conflicts[0]).toMatchObject({ severity: 'violation', resolved: false });
+  });
+
+  it('rejects a task that cannot be read, even if it bypasses the log', () => {
+    const w = world();
+    const raw = createEvent({ keys: w.bundles.supply!.actor, mission: w.capsule.id, seq: 1, prev: null, parents: [w.genesis.id], lamport: 2, wall: 2_000, type: 'task.created', body: { spec: { id: 'bad' }, source: { kind: 'human' } } as never }) as AnyEvent;
+    const s = reduce([w.genesis, raw], w.roster);
+    expect(s.tasks.bad).toBeUndefined();
+    expect(s.conflicts).toMatchObject([{ kind: 'unauthorised-action', severity: 'violation', events: [raw.id] }]);
   });
 
   it('accepts token work once the right is committed, in either order', () => {
@@ -422,6 +426,25 @@ describe('rejection as data', () => {
     expect(s.conflicts.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('lets a person resolve a rejected event from an unknown device', () => {
+    const w = world();
+    const stranger = generateKeys();
+    const e = createEvent({
+      keys: stranger,
+      mission: w.capsule.id,
+      seq: 1,
+      prev: null,
+      parents: [w.genesis.id],
+      lamport: 2,
+      wall: 2_000,
+      type: 'task.completed',
+      body: { taskId: 'open-first-aid', evidence: 'Trust me.', via: 'tap' },
+    }) as AnyEvent;
+    w.medics.log.ingest(e);
+    w.medics.author.emit('conflict.resolved', { conflictId: `forged-event:${e.id}`, resolution: 'Device removed.', keep: [] }, 2_500);
+    expect(stateOf(w.medics).conflicts).toMatchObject([{ kind: 'forged-event', resolved: true, resolution: 'Device removed.' }]);
+  });
+
   it('refuses a decision signed for another actor', () => {
     const w = world();
     create(w.supply, spec('a'));
@@ -437,6 +460,104 @@ describe('rejection as data', () => {
     const s = stateOf(w.supply);
     expect(s.observations.k).toBeUndefined();
     expect(conflictsOf(s, 'forged-event')).toHaveLength(1);
+  });
+});
+
+describe('hostile input from a rostered device', () => {
+  const TYPES = ['task.created', 'task.claimed', 'task.covered', 'task.accepted', 'task.completed', 'task.deferred', 'task.refused', 'task.released', 'right.committed', 'right.offered', 'right.accepted', 'right.declined', 'observation.recorded', 'actor.joined', 'link.changed', 'ferry.received', 'conflict.resolved'] as const;
+  const junk = fc.oneof(fc.jsonValue(), fc.constantFrom('__proto__', 'constructor', 'open-first-aid', 'evac-chair#1'));
+  const body = fc.record(
+    { taskId: junk, spec: junk, source: junk, decision: junk, tokens: junk, transfer: junk, to: junk, observation: junk, conflictId: junk, resolution: junk, keep: junk, credential: junk, team: junk, evidence: junk, via: junk, reason: junk },
+    { requiredKeys: [] },
+  );
+
+  it('turns any signed body into data, never an exception', () => {
+    fc.assert(
+      fc.property(fc.array(fc.tuple(fc.constantFrom(...TYPES), body), { maxLength: 12 }), (attacks) => {
+        const w = world();
+        const events: AnyEvent[] = [w.genesis];
+        attacks.forEach(([type, b], i) => {
+          const last = events[events.length - 1]!;
+          const prev = i === 0 ? null : last.id;
+          events.push(createEvent({ keys: w.bundles.medics!.actor, mission: w.capsule.id, seq: i + 1, prev, parents: [w.genesis.id], lamport: last.lamport + 1, wall: 2_000, type, body: b as never }) as AnyEvent);
+        });
+        const s = reduce(events, w.roster);
+        expect(s.capsule).not.toBeNull();
+        expect(same(reduce([...events].reverse(), w.roster), s)).toBe(true);
+      }),
+      { numRuns: 150 },
+    );
+  });
+
+  it.each(['__proto__', 'constructor', 'toString'])('survives %s as a task id and observation key', (name) => {
+    const w = world();
+    create(w.supply, spec(name));
+    w.supply.author.emit('observation.recorded', { observation: { key: name, value: 1, subject: 's', observedAt: 1, validForMs: 0, source: w.supply.id } }, 2_000);
+    const s = stateOf(w.supply);
+    expect(Object.getPrototypeOf(s.tasks)).toBe(Object.prototype);
+    expect(Object.keys(s.tasks)).toContain(name);
+    expect(Object.keys(s.observations)).toContain(name);
+    expect(s.conflicts).toEqual([]);
+  });
+});
+
+describe('token forks', () => {
+  function fork() {
+    const w = world();
+    create(w.supply, spec('a', { requires: ['stock'], needs: [{ resource: 'cart', count: 1 }] }));
+    create(w.supply, spec('b', { requires: ['stock'], needs: [{ resource: 'cart', count: 1 }] }));
+    sync(...w.all);
+    const twin = new EventLog(w.capsule.id);
+    twin.ingestMany(w.supply.log.all());
+    const twinAuthor = new Author(w.bundles.supply!.actor, twin);
+    w.supply.author.emit('right.committed', { tokens: ['cart#1'], taskId: 'a' }, 2_000);
+    twinAuthor.emit('right.committed', { tokens: ['cart#1'], taskId: 'b' }, 2_000);
+    claim(w.supply, 'a');
+    accept(w.supply, 'a');
+    twinAuthor.emit('task.claimed', { taskId: 'b', decision: decision(w.supply.id, 'b') }, 2_000);
+    twinAuthor.emit('task.accepted', { taskId: 'b', via: 'tap' }, 2_000);
+    w.medics.log.ingestMany(w.supply.log.all());
+    w.medics.log.ingestMany(twin.all());
+    return w;
+  }
+
+  it('leaves the task conflicted until a person resolves the fork', () => {
+    const w = fork();
+    const s = stateOf(w.medics);
+    const forks = conflictsOf(s, 'token-fork');
+    expect(forks).toHaveLength(1);
+    expect(forks[0]).toMatchObject({ severity: 'violation', resolved: false });
+    const taskId = forks[0]!.taskId!;
+    expect(s.tasks[taskId]?.status).toBe('conflicted');
+    w.medics.author.emit('conflict.resolved', { conflictId: forks[0]!.id, resolution: 'The organiser checked the cart.', keep: [] }, 3_000);
+    const after = stateOf(w.medics);
+    expect(conflictsOf(after, 'token-fork')[0]).toMatchObject({ resolved: true, resolution: 'The organiser checked the cart.' });
+    expect(after.tasks[taskId]?.status).not.toBe('conflicted');
+  });
+});
+
+describe('isTaskDone', () => {
+  it('counts finished work even while its record is in conflict', () => {
+    expect(isTaskDone({ status: 'completed' })).toBe(true);
+    expect(isTaskDone({ status: 'conflicted', evidence: 'Done.' })).toBe(true);
+    expect(isTaskDone({ status: 'conflicted' })).toBe(false);
+    expect(isTaskDone({ status: 'accepted' })).toBe(false);
+  });
+});
+
+describe('partial rosters', () => {
+  it('still reads the mission when a replica has only heard from some devices', () => {
+    const w = world();
+    const s = reduce([w.genesis], w.roster.slice(0, 2));
+    expect(s.capsule?.name).toBe('Field Day');
+    expect(Object.keys(s.actors)).toHaveLength(2);
+  });
+
+  it('rejects a genesis when the roster is empty or any entry is not genuine', () => {
+    const w = world();
+    expect(reduce([w.genesis], []).capsule).toBeNull();
+    const forged = [{ ...w.roster[0]!, team: 'supply' }];
+    expect(reduce([w.genesis], forged).capsule).toBeNull();
   });
 });
 
@@ -536,7 +657,7 @@ describe('convergence', () => {
       else if (o.op === 'complete') complete(d, id);
       else if (o.op === 'release') d.author.emit('task.released', { taskId: id, reason: 'x' }, 3_000);
       else if (o.op === 'refuse') d.author.emit('task.refused', { taskId: id, decision: decision(d.id, id, 'REFUSED') }, 3_000);
-      else d.author.emit('right.committed', { tokens: [TOKENS[o.token]!], taskId: id }, 3_000);
+      else if (o.op === 'commit') d.author.emit('right.committed', { tokens: [TOKENS[o.token]!], taskId: id }, 3_000);
     }
     return w;
   }

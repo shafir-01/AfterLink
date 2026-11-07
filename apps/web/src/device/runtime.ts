@@ -217,6 +217,7 @@ class DeviceRuntime {
   }
 
   private fail(error: unknown) {
+    console.error(error);
     const message = messageOf(error);
     this.update({ phase: 'failed', node: null, error: message });
     reportToStage({ kind: 'failed', message });

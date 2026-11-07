@@ -28,25 +28,14 @@ import type {
   TokenId,
   TransferId,
 } from '@afterlink/protocol';
-import { attachSync, every, Mesh, systemClock, type Clock, type LinkConnector } from '@afterlink/mesh';
+import { attachSync, Mesh, systemClock, type Clock, type LinkConnector } from '@afterlink/mesh';
 import { buildPacket, verifyPacket } from '@afterlink/ferry';
-import { canCommit, findTokens } from '@afterlink/authority';
-import { reduce } from '@afterlink/mission';
+import { canCommit, canOffer, canPerform, findTokens, pendingTransfers } from '@afterlink/authority';
+import { reduce, validateTaskSpec } from '@afterlink/mission';
 import { plan, type PlannerAction } from '@afterlink/planner';
-import {
-  activeRules,
-  externalTaskId,
-  isFinished,
-  isMine,
-  isTaskSpec,
-  reservedFor,
-  spawnerFor,
-  TRANSFER_REQUEST_KEY,
-  transferIdFor,
-  transferRequests,
-  transfersAddressedTo,
-} from './rules.ts';
-import { createMemoryStorage, type ActorMeta, type ActorStorage } from './storage.ts';
+import { SigningGate, type ChainPoint } from './gate.ts';
+import { isFinished, isMine, TRANSFER_REQUEST_KEY, transferIdFor, transferRequests } from './rules.ts';
+import { createMemoryStorage, type ActorMeta, type ActorStorage, type HighWaterMark } from './storage.ts';
 import type { ActorNode, ActorOptions, ActorView, FerryResult, ObserveOptions } from './types.ts';
 import { buildView } from './view.ts';
 
@@ -57,6 +46,8 @@ const DEFAULT_AUTOPILOT_MS = 1500;
 const HQ_LIVE_WINDOW_MS = 5000;
 const REPORT_BATCH = 100;
 const MAX_DECIDE_PASSES = 4;
+/** Shown to the person scanning. Age alone never rejects a packet: events prove themselves. */
+const FERRY_STALE_MS = 10 * 60_000;
 
 const NEXT_STEPS: Partial<Record<RefusalCode, NextStep[]>> = {
   NO_RIGHT: ['REQUEST_TRANSFER', 'WAIT_FOR_CONTACT', 'CARRY_UPDATE'],
@@ -78,6 +69,8 @@ class Actor implements ActorNode {
   private readonly storage: ActorStorage;
   private readonly clock: Clock;
   private readonly now: () => number;
+  /** Intervals use this, so a wall clock stepping backwards cannot silence cover. */
+  private readonly mono: () => number;
   private readonly tickMs: number;
   private readonly notifyMs: number;
   private readonly autopilot: boolean;
@@ -89,36 +82,41 @@ class Actor implements ActorNode {
   private signal: SignalClient | null;
   private faults: FaultPlan = { blocked: [] };
 
+  private gate = new SigningGate({ seq: 0, id: null }, null);
   private running = false;
   private stepping = false;
-  private stopTick: (() => void) | null = null;
+  private tickHandle: unknown = null;
   private stepHandle: unknown = null;
   private notifyHandle: unknown = null;
 
-  /** Own events signed but not yet durable. They count for local state and never leave the device. */
+  /** Own events signed but not yet durable. They count for local decisions and go nowhere else. */
   private unflushed: AnyEvent[] = [];
   private writeQueue: AnyEvent[] = [];
   private writing: Promise<void> | null = null;
+  private batching = 0;
   private storageError: string | null = null;
   private head: { seq: number; id: EventId | null; lamport: number } = { seq: 0, id: null, lamport: 0 };
+  private markSeq = 0;
+  private joined = false;
 
   private stateKey = -1;
   private stateCache: MissionState | null = null;
   private viewCache: ActorView | null = null;
   private readonly subscribers = new Set<(v: ActorView) => void>();
 
-  private readonly heard: Record<ActorId, number> = {};
+  private readonly heardAt = new Map<ActorId, number>();
   private readonly linkFacts = new Map<ActorId, LinkState>();
   private readonly linkHealth = new Map<ActorId, number>();
+  /** Peers whose view of this actor's chain has been checked since their link came up. */
+  private readonly checked = new Set<ActorId>();
   private readonly accepted = new Set<TaskId>();
-  private readonly declined = new Set<TaskId>();
-  private readonly ferried = new Set<string>();
+  private readonly ferrySeen = new Set<string>();
   private readonly pilotSince = new Map<string, number>();
 
   private readonly hqLive = new Set<EventId>();
   private readonly hqLate = new Set<EventId>();
   private reportedThisSession = new Set<EventId>();
-  private blindSpans: { from: number; to: number }[] = [];
+  private readonly blindSpans: { from: number; to: number }[] = [];
   private blindFrom: number | null = null;
   private metaDirty = false;
 
@@ -135,6 +133,7 @@ class Actor implements ActorNode {
     this.storage = o.storage ?? createMemoryStorage();
     this.clock = o.connector.clock ?? systemClock;
     this.now = o.now ?? (() => this.clock.now());
+    this.mono = o.connector.clock ? () => this.clock.now() : () => performance.now();
     this.tickMs = o.tickMs ?? DEFAULT_TICK_MS;
     this.notifyMs = o.notifyMs ?? DEFAULT_NOTIFY_MS;
     this.autopilot = o.autopilot ?? false;
@@ -148,9 +147,12 @@ class Actor implements ActorNode {
 
   async start(): Promise<void> {
     if (this.running) return;
-    await this.restore();
-    const startedAt = this.now();
-    for (const p of this.peers) this.heard[p] ??= startedAt;
+    if (!(await this.storage.acquire())) {
+      await this.readOnly();
+      return;
+    }
+    const mark = await this.restore();
+    this.gate = new SigningGate(this.head, mark);
 
     const mesh = new Mesh({
       self: this.id,
@@ -158,42 +160,47 @@ class Actor implements ActorNode {
       signal: this.signal ?? undefined,
       connector: this.connector,
       room: this.bundle.room,
+      secretKey: this.keys.secretKey,
     });
     this.mesh = mesh;
     mesh.onLinkChange((info) => this.onLink(info));
     mesh.onSignalState((up) => this.onSignal(up));
     mesh.onIngress((ref, spec) => this.onIngress(ref, spec));
+    // Registered ahead of sync, so a summary can close the gate before anything acts on it.
+    mesh.onMessage((peer, msg) => {
+      if (msg.t === 'summary' && msg.summary.mission === this.mission) this.onPeerSummary(peer, msg.summary);
+    });
     if (this.faults.blocked.length) mesh.setFaults(this.faults);
     this.sync = attachSync(mesh, this.log, (events, from) => this.onRemote(events, from));
     this.running = true;
-    if (this.head.seq === 0) {
-      const { team, name, credential } = this.bundle;
-      this.emit('actor.joined', { team, name, credential });
-    }
+    this.onGate();
     mesh.start();
-
-    if (!mesh.signalUp) this.blindFrom = startedAt;
-    this.stopTick = every(this.clock, this.tickMs, () => this.tick());
+    this.scheduleTick();
     this.kick();
+  }
+
+  private scheduleTick(): void {
+    this.tickHandle = this.clock.setTimeout(() => {
+      this.scheduleTick();
+      this.tick();
+    }, this.tickMs);
   }
 
   stop(): void {
     if (!this.running) return;
     this.running = false;
-    this.stopTick?.();
-    this.stopTick = null;
-    if (this.stepHandle !== null) this.clock.clearTimeout(this.stepHandle);
-    if (this.notifyHandle !== null) this.clock.clearTimeout(this.notifyHandle);
-    this.stepHandle = this.notifyHandle = null;
+    for (const handle of [this.tickHandle, this.stepHandle, this.notifyHandle]) {
+      if (handle !== null) this.clock.clearTimeout(handle);
+    }
+    this.tickHandle = this.stepHandle = this.notifyHandle = null;
     this.sync?.stop();
     this.mesh?.stop();
     this.sync = null;
     this.mesh = null;
     this.viewCache = null;
     this.saveMeta();
-    void this.settled()
-      .catch(() => undefined)
-      .finally(() => this.storage.close?.());
+    if (this.writing) void this.writing.finally(() => this.storage.close?.());
+    else this.storage.close?.();
   }
 
   async settled(): Promise<void> {
@@ -201,40 +208,50 @@ class Actor implements ActorNode {
     if (this.storageError) throw new Error(this.storageError);
   }
 
-  private async restore(): Promise<void> {
+  /** Another runtime owns this identity here: show what is stored, and touch nothing. */
+  private async readOnly(): Promise<void> {
     const stored = await this.storage.load();
-    const mine = stored?.identity.publicKey === this.id && stored.identity.mission === this.mission;
-    if (!stored || !mine) {
+    if (stored?.identity.publicKey === this.id && stored.identity.mission === this.mission) {
+      this.log.ingestMany(stored.events);
+    }
+    this.gate.twin();
+    this.changed();
+  }
+
+  private async restore(): Promise<ChainPoint | null> {
+    const stored = await this.storage.load();
+    const held = await this.storage.readMark();
+    const mark: HighWaterMark | null = held?.actor === this.id && held.mission === this.mission ? held : null;
+    this.markSeq = mark?.seq ?? 0;
+    if (stored?.identity.publicKey === this.id && stored.identity.mission === this.mission) {
+      this.log.ingestMany(stored.events);
+      for (const e of stored.events) if (e.actor === this.id) this.learnOwn(e);
+      this.faults = stored.meta.faults ?? this.faults;
+      for (const id of stored.meta.hqLive ?? []) this.hqLive.add(id);
+      for (const id of stored.meta.hqLate ?? []) this.hqLate.add(id);
+      for (const id of stored.meta.ferrySeen ?? []) this.ferrySeen.add(id);
+    } else {
       await this.storage.reset({ publicKey: this.id, secretKey: this.keys.secretKey, mission: this.mission });
       this.enqueue([this.bundle.genesis]);
       await this.settled();
-      return;
     }
-    this.log.ingestMany(stored.events);
-    for (const e of stored.events) {
-      if (e.actor === this.id) this.learnOwn(e);
-      this.heard[e.actor] = Math.max(this.heard[e.actor] ?? 0, e.wall);
-    }
-    this.faults = stored.meta.faults ?? this.faults;
-    for (const id of stored.meta.hqLive ?? []) this.hqLive.add(id);
-    for (const id of stored.meta.hqLate ?? []) this.hqLate.add(id);
+    return mark;
   }
 
   private learnOwn(e: AnyEvent): void {
     if (e.seq > this.head.seq) this.head = { seq: e.seq, id: e.id, lamport: e.lamport };
     switch (e.type) {
-      case 'task.claimed':
-        this.declined.delete(e.body.taskId);
+      case 'actor.joined':
+        this.joined = true;
         break;
       case 'task.accepted':
         this.accepted.add(e.body.taskId);
         break;
       case 'task.released':
         this.accepted.delete(e.body.taskId);
-        this.declined.add(e.body.taskId);
         break;
       case 'ferry.received':
-        this.ferried.add(e.body.packetId);
+        this.ferrySeen.add(e.body.packetId);
         break;
       case 'link.changed':
         this.linkFacts.set(e.body.peer, e.body.state);
@@ -242,10 +259,58 @@ class Actor implements ActorNode {
     }
   }
 
+  // ---------- The signing gate ----------
+
+  private get mayAct(): boolean {
+    return this.running && this.gate.phase === 'ready';
+  }
+
+  private holds = (id: EventId): boolean => this.log.has(id) || this.unflushed.some((e) => e.id === id);
+
+  private onPeerSummary(peer: ActorId, summary: SyncSummary): void {
+    const fresh = !this.checked.has(peer);
+    this.checked.add(peer);
+    this.onEvidence(summary);
+    if (!fresh) return;
+    const info = this.mesh?.links().find((l) => l.peer === peer);
+    if (info) this.onLink(info);
+    this.kick();
+  }
+
+  /**
+   * A peer may know this chain better than this device does, so nothing is signed on a link
+   * until that peer's summary has been read. Alone, there is nothing to wait for.
+   */
+  private get peersChecked(): boolean {
+    return this.reachable().every((p) => this.checked.has(p));
+  }
+
+  private onEvidence(summary: SyncSummary): void {
+    const before = this.gate.phase;
+    this.gate.evidence(this.head, summary.heads[this.id], this.holds);
+    if (this.gate.phase !== before) this.onGate();
+  }
+
+  /** When the gate opens, the device catches up on what it could not sign while it was shut. */
+  private onGate(): void {
+    this.changed();
+    if (this.gate.phase !== 'ready') return;
+    if (!this.joined) {
+      const { team, name, credential } = this.bundle;
+      this.emit('actor.joined', { team, name, credential });
+    }
+    for (const info of this.mesh?.links() ?? []) if (info.state === 'open') this.onLink(info);
+    this.kick();
+  }
+
   // ---------- Durable emission ----------
 
-  /** Signs now, reveals later: the event joins the shared log only after it is durable. */
+  /**
+   * The only place this device signs. The event joins the shared log only after it and the
+   * high-water mark are durable, so nothing a peer, packet or screen ever sees can be lost here.
+   */
   private emit<T extends EventType>(type: T, body: EventBodies[T]): EventEnvelope<T> {
+    if (this.gate.phase !== 'ready') throw new Error(`signing is shut: ${this.gate.phase}`);
     const e = createEvent({
       keys: this.keys,
       mission: this.mission,
@@ -264,14 +329,32 @@ class Actor implements ActorNode {
     return e;
   }
 
+  /** Everything emitted inside lands as one atomic write, so a crash cannot split a commit from its claim. */
+  private together<R>(fn: () => R): R {
+    this.batching++;
+    try {
+      return fn();
+    } finally {
+      this.batching--;
+      this.drain();
+    }
+  }
+
   private enqueue(events: AnyEvent[]): void {
     this.writeQueue.push(...events);
     this.drain();
   }
 
+  private markFor(batch: AnyEvent[]): HighWaterMark | undefined {
+    let top: AnyEvent | undefined;
+    for (const e of batch) if (e.actor === this.id && e.seq > (top?.seq ?? this.markSeq)) top = e;
+    return top && { actor: this.id, mission: this.mission, seq: top.seq, id: top.id };
+  }
+
   private drain(): void {
-    if (this.writing || !this.writeQueue.length) return;
+    if (this.writing || this.batching || !this.writeQueue.length) return;
     const batch = this.writeQueue.splice(0);
+    const mark = this.markFor(batch);
     const failed = (err: unknown) => {
       this.writeQueue.unshift(...batch);
       this.storageError = err instanceof Error ? err.message : String(err);
@@ -279,18 +362,18 @@ class Actor implements ActorNode {
     };
     let result: void | Promise<void>;
     try {
-      result = this.storage.append(batch);
+      result = this.storage.append(batch, mark);
     } catch (err) {
       failed(err);
       return;
     }
     if (!result) {
-      this.landed(batch);
+      this.landed(batch, mark);
       return;
     }
     this.writing = result
       .then(
-        () => this.landed(batch),
+        () => this.landed(batch, mark),
         (err) => failed(err),
       )
       .finally(() => {
@@ -299,7 +382,8 @@ class Actor implements ActorNode {
       });
   }
 
-  private landed(batch: AnyEvent[]): void {
+  private landed(batch: AnyEvent[], mark: HighWaterMark | undefined): void {
+    if (mark) this.markSeq = mark.seq;
     if (this.storageError) {
       this.storageError = null;
       this.changed();
@@ -317,30 +401,61 @@ class Actor implements ActorNode {
 
   private onRemote(events: AnyEvent[], from: ActorId): void {
     if (!events.length) return;
-    this.heard[from] = this.now();
+    this.noteHeard(from, this.now());
     this.absorb(events);
   }
 
-  /** Learning about an actor is not contact with it: heard times follow the events themselves. */
+  /** Learning about an actor is not contact with it, so heard times follow the events themselves. */
   private absorb(events: AnyEvent[]): void {
+    let own = false;
     for (const e of events) {
-      if (e.actor === this.id) this.learnOwn(e);
-      else this.heard[e.actor] = Math.max(this.heard[e.actor] ?? 0, e.wall);
+      if (e.actor !== this.id) {
+        this.noteHeard(e.actor, e.wall);
+        continue;
+      }
+      own = true;
+      if (this.unflushed.some((u) => u.seq === e.seq && u.id !== e.id)) this.gate.halt();
+      this.learnOwn(e);
     }
     this.enqueue(events);
+    if (own) this.checkOwnChain();
     this.changed();
     this.kick();
   }
 
+  private checkOwnChain(): void {
+    const before = this.gate.phase;
+    if (this.log.forks().some((f) => f.actor === this.id)) this.gate.halt();
+    else this.gate.caughtUp(this.head, this.holds);
+    if (this.gate.phase !== before) this.onGate();
+  }
+
+  private noteHeard(actor: ActorId, wall: number): void {
+    if (!this.peers.includes(actor)) return;
+    const at = this.mono() - Math.max(0, this.now() - wall);
+    if (at > (this.heardAt.get(actor) ?? -Infinity)) this.heardAt.set(actor, at);
+  }
+
+  private lastHeard(): Record<ActorId, number> {
+    const now = this.now();
+    const mono = this.mono();
+    const out: Record<ActorId, number> = {};
+    for (const [actor, at] of this.heardAt) out[actor] = now - (mono - at);
+    return out;
+  }
+
   private onLink(info: LinkInfo): void {
     this.changed();
-    if (!this.running || info.state === 'connecting') return;
-    if (this.linkFacts.get(info.peer) === info.state) return;
+    if (info.state !== 'open') this.checked.delete(info.peer);
+    if (!this.mayAct || info.state === 'connecting') return;
+    if (info.state === 'open' && !this.checked.has(info.peer)) return;
+    if ((info.state === 'open') === (this.linkFacts.get(info.peer) === 'open')) return;
     this.emit('link.changed', { peer: info.peer, state: info.state, transport: info.transport });
     this.kick();
   }
 
   private onSignal(up: boolean): void {
+    if (!this.running) return;
     const at = this.now();
     if (up) {
       if (this.blindFrom !== null) this.blindSpans.push({ from: this.blindFrom, to: at });
@@ -355,11 +470,10 @@ class Actor implements ActorNode {
   }
 
   private onIngress(ref: string, spec: TaskSpec): void {
-    if (!this.running || !isTaskSpec(spec)) return;
-    const id = externalTaskId(ref);
+    if (!this.mayAct || validateTaskSpec(spec).length) return;
     const tasks = this.state().tasks;
-    if (tasks[id] || Object.values(tasks).some((t) => t.source.ref === ref)) return;
-    this.emit('task.created', { spec: { ...spec, id }, source: { kind: 'external', ref } });
+    if (tasks[spec.id] || Object.values(tasks).some((t) => t.source.ref === ref)) return;
+    this.emit('task.created', { spec, source: { kind: 'external', ref } });
     this.kick();
   }
 
@@ -385,7 +499,7 @@ class Actor implements ActorNode {
       const at = l.lastHeardAt ?? 0;
       if (this.linkHealth.get(l.peer) === at) continue;
       this.linkHealth.set(l.peer, at);
-      this.heard[l.peer] = Math.max(this.heard[l.peer] ?? 0, at);
+      if (at) this.noteHeard(l.peer, this.now());
       this.changed();
     }
   }
@@ -394,10 +508,14 @@ class Actor implements ActorNode {
     if (!this.running || this.stepping) return;
     this.stepping = true;
     try {
-      for (let pass = 0; pass < MAX_DECIDE_PASSES; pass++) {
-        const before = this.head.seq;
-        this.decide();
-        if (this.head.seq === before) break;
+      if (this.mayAct && this.peersChecked) {
+        this.together(() => {
+          for (let pass = 0; pass < MAX_DECIDE_PASSES; pass++) {
+            const before = this.head.seq;
+            this.decide();
+            if (this.head.seq === before) break;
+          }
+        });
       }
       this.report();
       this.flushMeta();
@@ -408,7 +526,7 @@ class Actor implements ActorNode {
 
   private decide(): void {
     const now = this.now();
-    this.applyContingencies(now);
+    this.takeRequestedRights();
     const state = this.state();
     const actions = plan({
       self: this.id,
@@ -416,22 +534,21 @@ class Actor implements ActorNode {
       reachable: this.reachable(),
       now,
       horizon: this.horizon(),
-      lastHeard: { ...this.heard },
+      lastHeard: this.lastHeard(),
     });
     for (const a of actions) this.perform(a, state);
     this.answerRequests();
-    this.takeRequestedRights();
     if (this.autopilot) this.drive(now);
   }
 
   private perform(a: PlannerAction, state: MissionState): void {
-    const task = 'taskId' in a ? state.tasks[a.taskId] : undefined;
+    const task = state.tasks[a.taskId];
     switch (a.type) {
       case 'claim':
-        if (!this.declined.has(a.taskId)) this.emit('task.claimed', { taskId: a.taskId, decision: a.decision });
+        if (this.spend(a.tokens, a.taskId)) this.emit('task.claimed', { taskId: a.taskId, decision: a.decision });
         break;
       case 'cover':
-        if (!this.declined.has(a.taskId)) this.emit('task.covered', { taskId: a.taskId, decision: a.decision });
+        if (this.spend(a.tokens, a.taskId)) this.emit('task.covered', { taskId: a.taskId, decision: a.decision });
         break;
       case 'refuse':
         if (!this.repeats(task, a.decision)) this.emit('task.refused', { taskId: a.taskId, decision: a.decision });
@@ -443,82 +560,74 @@ class Actor implements ActorNode {
         this.emit('task.released', { taskId: a.taskId, reason: a.reason });
         break;
       case 'request-transfer':
-        this.requestRights(a, state);
+        this.requestRights(a.taskId, a.resource, a.count, a.from, state);
         break;
     }
   }
 
-  /** Decisions are facts, so the same refusal is stated once, not once per tick. */
+  /** Planner output is checked against the newest state in the same synchronous step that signs. */
+  private spend(tokens: TokenId[], taskId: TaskId): boolean {
+    if (!tokens.length) return true;
+    if (!canCommit(this.state(), this.id, tokens).ok) return false;
+    this.emit('right.committed', { tokens, taskId });
+    return true;
+  }
+
+  /** Decisions are facts, so the same verdict is stated once, not once per tick. */
   private repeats(task: TaskRecord | undefined, d: DecisionRecord): boolean {
     const last = task?.decisions.filter((x) => x.actor === this.id).at(-1);
-    return !!last && last.outcome === d.outcome && last.refusal === d.refusal;
+    const said = (x: DecisionRecord) => `${x.outcome}|${x.refusal ?? ''}|${(x.next ?? []).join()}`;
+    return !!last && said(last) === said(d);
   }
 
-  private requestRights(a: Extract<PlannerAction, { type: 'request-transfer' }>, state: MissionState): void {
-    const known = transferRequests(state).some(
-      (r) => r.by === this.id && r.taskId === a.taskId && r.resource === a.resource && r.from === a.from,
+  private requestRights(taskId: TaskId, resource: ResourceId, count: number, from: ActorId, state: MissionState): void {
+    const asked = transferRequests(state).some(
+      (r) => r.by === this.id && r.taskId === taskId && r.resource === resource && r.from === from,
     );
-    if (known) return;
-    this.record(TRANSFER_REQUEST_KEY, { taskId: a.taskId, resource: a.resource, count: a.count, from: a.from }, a.taskId, 0);
+    if (!asked) this.record(TRANSFER_REQUEST_KEY, { taskId, resource, count, from }, taskId, 0);
   }
 
-  /** A holder hands over rights it is not using, once per request, only to a requester it can reach. */
+  /**
+   * A holder hands over a right it is not using, once per request, and only to a requester it can
+   * reach: an offer into a partition would lock the right in transit for no one.
+   */
   private answerRequests(): void {
     const state = this.state();
-    const reachable = new Set(this.reachable());
+    const reachable = this.reachable();
     for (const r of transferRequests(state)) {
-      if (r.from !== this.id || !reachable.has(r.by)) continue;
+      if (r.from !== this.id || !reachable.includes(r.by)) continue;
       const task = state.tasks[r.taskId];
-      if (!task || isFinished(task) || isMine(task, this.id)) continue;
+      if (!task || isFinished(task) || task.owner) continue;
       const need = task.spec.needs.find((n) => n.resource === r.resource);
-      if (!need || r.count > need.count) continue;
+      if (!need || r.count > need.count || !canPerform(state, r.by, task).ok) continue;
       const transfer = transferIdFor(r);
       if (this.offered(transfer)) continue;
-      const free = findTokens(state, this.id, r.resource, Number.MAX_SAFE_INTEGER);
-      const spare = free.length - reservedFor(state, this.id, r.resource);
-      if (spare < r.count) continue;
-      this.emit('right.offered', { transfer, tokens: free.slice(0, r.count), to: r.by });
+      const free = findTokens(state, this.id, r.resource, r.count);
+      if (free.length === r.count) this.emit('right.offered', { transfer, tokens: free, to: r.by });
     }
   }
 
   private offered(transfer: TransferId): boolean {
-    const held = [...this.unflushed, ...this.log.byActor(this.id)];
-    return held.some((e) => e.type === 'right.offered' && e.body.transfer === transfer);
+    const mine = [...this.log.byActor(this.id), ...this.unflushed];
+    return mine.some((e) => e.type === 'right.offered' && e.body.transfer === transfer);
   }
 
   /** An offer answering this actor's own request needs no second confirmation. */
   private takeRequestedRights(): void {
     const state = this.state();
     const asked = new Set(transferRequests(state).filter((r) => r.by === this.id).map(transferIdFor));
-    for (const t of this.pending(state)) {
+    for (const t of pendingTransfers(state, this.id)) {
       if (asked.has(t.transfer)) this.answerTransfer(t.transfer, true);
-    }
-  }
-
-  private pending(state: MissionState) {
-    return transfersAddressedTo(this.id, state, this.allEvents());
-  }
-
-  private applyContingencies(now: number): void {
-    const state = this.state();
-    const rules = activeRules(state, now).filter((r) => r.then.spawn?.some((s) => !state.tasks[s.id]));
-    if (!rules.length) return;
-    const group = [this.id, ...this.reachable()];
-    for (const rule of rules) {
-      if (spawnerFor(rule.id, group) !== this.id) continue;
-      for (const spec of rule.then.spawn ?? []) {
-        if (state.tasks[spec.id]) continue;
-        this.emit('task.created', { spec, source: { kind: 'contingency', ref: `${rule.id}:${spec.id}` } });
-      }
     }
   }
 
   /** The simulated volunteer: one tap per delay, always through the public commands. */
   private drive(now: number): void {
     const state = this.state();
-    for (const t of this.pending(state)) this.answerTransfer(t.transfer, true);
+    const humanOnly = state.capsule?.fallback.humanApprovalKinds ?? [];
+    for (const t of pendingTransfers(state, this.id)) this.answerTransfer(t.transfer, true);
     for (const task of Object.values(state.tasks)) {
-      if (isFinished(task) || !isMine(task, this.id)) continue;
+      if (isFinished(task) || !isMine(task, this.id) || humanOnly.includes(task.spec.kind)) continue;
       const id = task.spec.id;
       const stage = this.accepted.has(id) ? 'complete' : 'accept';
       const key = `${id}:${stage}`;
@@ -540,7 +649,6 @@ class Actor implements ActorNode {
     const mesh = this.mesh;
     if (!mesh?.signalUp || this.reportedThisSession.size >= this.log.size) return;
     const fresh = this.log.all().filter((e) => !this.reportedThisSession.has(e.id));
-    if (!fresh.length) return;
     const at = this.now();
     for (let i = 0; i < fresh.length; i += REPORT_BATCH) {
       const batch = fresh.slice(i, i + REPORT_BATCH);
@@ -568,7 +676,12 @@ class Actor implements ActorNode {
   private flushMeta(): void {
     if (!this.metaDirty) return;
     this.metaDirty = false;
-    const meta: ActorMeta = { faults: this.faults, hqLive: [...this.hqLive], hqLate: [...this.hqLate] };
+    const meta: ActorMeta = {
+      faults: this.faults,
+      hqLive: [...this.hqLive],
+      hqLate: [...this.hqLate],
+      ferrySeen: [...this.ferrySeen],
+    };
     try {
       void Promise.resolve(this.storage.saveMeta(meta)).catch(() => undefined);
     } catch {
@@ -578,15 +691,12 @@ class Actor implements ActorNode {
 
   // ---------- Reading ----------
 
-  private allEvents(): AnyEvent[] {
-    const all = this.log.all();
-    return this.unflushed.length ? [...all, ...this.unflushed] : all;
-  }
-
+  /** What this device has signed counts for its own decisions, durable or not. */
   private state(): MissionState {
     const key = this.log.size + this.unflushed.length;
     if (this.stateCache && this.stateKey === key) return this.stateCache;
-    this.stateCache = reduce(this.allEvents(), this.bundle.roster);
+    const events = this.unflushed.length ? [...this.log.all(), ...this.unflushed] : this.log.all();
+    this.stateCache = reduce(events, this.bundle.roster);
     this.stateKey = key;
     return this.stateCache;
   }
@@ -604,14 +714,17 @@ class Actor implements ActorNode {
 
   view(): ActorView {
     if (this.viewCache) return this.viewCache;
+    const events = this.log.all();
     this.viewCache = buildView({
       self: { id: this.id, team: this.team, name: this.name, custodian: this.custodian },
-      state: this.state(),
-      events: this.allEvents(),
+      phase: this.gate.phase,
+      phaseReason: this.gate.reason,
+      state: this.unflushed.length ? reduce(events, this.bundle.roster) : this.state(),
+      events,
       links: this.mesh?.links() ?? [],
       reachable: this.reachable(),
       horizon: this.horizon(),
-      lastHeard: { ...this.heard },
+      lastHeard: this.lastHeard(),
       summary: this.log.summary(),
       signalUp: this.mesh?.signalUp ?? false,
       hqSeen: [...this.hqLive],
@@ -643,50 +756,51 @@ class Actor implements ActorNode {
 
   // ---------- Commands ----------
 
-  private requireRunning(): void {
-    if (!this.running) throw new Error('actor is not running');
-  }
-
-  submitTask(spec: TaskSpec, source: TaskSource): void {
-    this.requireRunning();
+  submitTask(spec: TaskSpec, source: TaskSource): boolean {
+    const problems = validateTaskSpec(spec);
+    if (problems.length) throw new TypeError(problems[0]);
+    if (!this.mayAct) return false;
     const tasks = this.state().tasks;
-    if (tasks[spec.id]) return;
-    if (source.ref && Object.values(tasks).some((t) => t.source.ref === source.ref)) return;
+    if (tasks[spec.id]) return false;
+    if (source.ref && Object.values(tasks).some((t) => t.source.ref === source.ref)) return false;
     this.emit('task.created', { spec, source });
     this.kick();
+    return true;
   }
 
   acceptTask(id: TaskId, via: 'tap' | 'voice' | 'auto' = 'tap'): boolean {
-    this.requireRunning();
+    if (!this.mayAct) return false;
     const task = this.state().tasks[id];
     if (!task || isFinished(task)) return false;
     if (this.accepted.has(id)) return true;
-    if (!isMine(task, this.id)) {
-      if (task.owner) return false;
-      if (!this.volunteer(task)) return false;
-    }
-    if (!this.commitRights(id)) return false;
-    this.emit('task.accepted', { taskId: id, via });
+    const done = this.together(() => {
+      if (!isMine(task, this.id) && (task.owner || !this.volunteer(task))) return false;
+      if (!this.commitRights(id)) return false;
+      this.emit('task.accepted', { taskId: id, via });
+      return true;
+    });
     this.kick();
-    return true;
+    return done;
   }
 
   /** A person taking an unowned task is an explicit local decision, recorded like any other. */
   private volunteer(task: TaskRecord): boolean {
-    const skills = this.state().capsule?.teams.find((t) => t.id === this.team)?.capabilities ?? [];
-    if (!task.spec.requires.every((c) => skills.includes(c))) {
-      this.refuse(task.spec.id, 'NO_CAPABILITY', `${this.name} does not have the skills this task requires.`);
+    const id = task.spec.id;
+    const able = canPerform(this.state(), this.id, task);
+    if (!able.ok) {
+      this.refuse(id, able.code, able.reason);
       return false;
     }
-    const decision = this.localDecision(task.spec.id, 'ACCEPTED', {
+    if (!this.commitRights(id)) return false;
+    const decision = this.localDecision(id, 'ACCEPTED', {
       reason: `${this.name} took this task by hand.`,
-      policy: 'human-initiative',
+      policy: 'human.initiative',
     });
-    this.emit('task.claimed', { taskId: task.spec.id, decision });
+    this.emit('task.claimed', { taskId: id, decision });
     return true;
   }
 
-  /** Spends the rights a task needs. Refuses, on the record, when they are not held here. */
+  /** Spends what a task still needs from this actor. Refuses, on the record, when it is not held here. */
   private commitRights(id: TaskId): boolean {
     const state = this.state();
     const task = state.tasks[id];
@@ -705,14 +819,7 @@ class Actor implements ActorNode {
       }
       picked.push(...found);
     }
-    if (!picked.length) return true;
-    const check = canCommit(state, this.id, picked);
-    if (!check.ok) {
-      this.refuse(id, check.code, check.reason);
-      return false;
-    }
-    this.emit('right.committed', { tokens: picked, taskId: id });
-    return true;
+    return this.spend(picked, id);
   }
 
   private refuse(taskId: TaskId, refusal: RefusalCode, reason: string): void {
@@ -743,28 +850,36 @@ class Actor implements ActorNode {
   }
 
   declineTask(id: TaskId, reason: string): boolean {
-    this.requireRunning();
+    if (!this.mayAct) return false;
     const task = this.state().tasks[id];
     if (!task || isFinished(task) || !isMine(task, this.id)) return false;
-    this.emit('task.released', { taskId: id, reason });
+    this.together(() => {
+      this.emit('task.released', { taskId: id, reason });
+      // A refusal with no machine code is a person saying no, so the planner will not hand it straight back.
+      const decision = this.localDecision(id, 'REFUSED', { reason, policy: 'human.declined' });
+      this.emit('task.refused', { taskId: id, decision });
+    });
     this.kick();
     return true;
   }
 
   completeTask(id: TaskId, evidence: string, via: 'tap' | 'voice' | 'auto' = 'tap'): boolean {
-    this.requireRunning();
+    if (!this.mayAct) return false;
     const task = this.state().tasks[id];
     if (!task || isFinished(task) || !isMine(task, this.id)) return false;
-    if (!this.accepted.has(id) && !this.acceptTask(id, via)) return false;
-    this.emit('task.completed', { taskId: id, evidence, via });
+    const done = this.together(() => {
+      if (!this.accepted.has(id) && !this.acceptTask(id, via)) return false;
+      this.emit('task.completed', { taskId: id, evidence, via });
+      return true;
+    });
     this.kick();
-    return true;
+    return done;
   }
 
-  offerTokens(tokens: TokenId[], to: ActorId): TransferId | null {
-    this.requireRunning();
-    const state = this.state();
-    if (!tokens.length || !this.peers.includes(to) || !canCommit(state, this.id, tokens).ok) return null;
+  offerTokens(tokens: TokenId[], to: ActorId, opts: { carry?: boolean } = {}): TransferId | null {
+    if (!this.mayAct || !tokens.length || !this.peers.includes(to)) return null;
+    if (!opts.carry && !this.reachable().includes(to)) return null;
+    if (!canOffer(this.state(), this.id, tokens).ok) return null;
     const transfer = sha256(`${this.id}:${this.head.seq + 1}:${tokens.join(',')}`).slice(0, 22);
     this.emit('right.offered', { transfer, tokens, to });
     this.kick();
@@ -772,28 +887,22 @@ class Actor implements ActorNode {
   }
 
   answerTransfer(transfer: TransferId, accept: boolean): boolean {
-    this.requireRunning();
-    if (!this.pending(this.state()).some((t) => t.transfer === transfer)) return false;
+    if (!this.mayAct) return false;
+    if (!pendingTransfers(this.state(), this.id).some((t) => t.transfer === transfer)) return false;
     this.emit(accept ? 'right.accepted' : 'right.declined', { transfer });
     this.kick();
     return true;
   }
 
-  observe(key: string, value: Json, opts: ObserveOptions = {}): void {
-    this.requireRunning();
-    this.record(key, value, opts.subject ?? key, opts.validForMs ?? 0);
-    this.kick();
-  }
-
   requestTransfer(resource: ResourceId, taskId: TaskId, from?: ActorId): boolean {
-    this.requireRunning();
+    if (!this.mayAct) return false;
     const state = this.state();
     const task = state.tasks[taskId];
     const need = task?.spec.needs.find((n) => n.resource === resource);
     if (!task || !need || isFinished(task)) return false;
     const holder = from ?? this.likelyHolder(state, resource);
     if (!holder || holder === this.id) return false;
-    this.requestRights({ type: 'request-transfer', resource, from: holder, count: need.count, taskId }, state);
+    this.requestRights(taskId, resource, need.count, holder, state);
     this.kick();
     return true;
   }
@@ -802,15 +911,15 @@ class Actor implements ActorNode {
     const holders = Object.values(state.tokens)
       .filter((t) => t.resource === resource && t.state === 'held' && t.holder && t.holder !== this.id)
       .map((t) => t.holder as ActorId);
-    const reachable = new Set(this.reachable());
-    return holders.find((h) => reachable.has(h)) ?? holders[0];
+    const reachable = this.reachable();
+    return holders.find((h) => reachable.includes(h)) ?? holders[0];
   }
 
-  /** Hands an already open link to the mesh, for transports negotiated outside it. */
-  adoptLink(link: Link): void {
-    this.requireRunning();
-    this.mesh?.adopt(link);
-    this.sync?.nudge();
+  observe(key: string, value: Json, opts: ObserveOptions = {}): boolean {
+    if (!this.mayAct) return false;
+    this.record(key, value, opts.subject ?? key, opts.validForMs ?? 0);
+    this.kick();
+    return true;
   }
 
   private record(key: string, value: Json, subject: string, validForMs: number): void {
@@ -832,6 +941,12 @@ class Actor implements ActorNode {
     this.changed();
   }
 
+  adoptLink(link: Link): boolean {
+    const adopted = this.mesh?.adopt(link) ?? false;
+    if (adopted) this.sync?.nudge();
+    return adopted;
+  }
+
   // ---------- Ferry ----------
 
   buildFerry(remote?: SyncSummary): FerryPacket {
@@ -839,33 +954,41 @@ class Actor implements ActorNode {
   }
 
   ingestFerry(p: FerryPacket): FerryResult {
-    this.requireRunning();
-    const refuse = (reason: string): FerryResult => ({
+    const refused = (reason: string): FerryResult => ({
       newEvents: 0,
       duplicates: 0,
       rejected: Array.isArray(p?.events) ? p.events.length : 0,
       buffered: 0,
+      stale: false,
       reason,
     });
-    if (!this.bundle.roster.some((r) => r.actor === p?.from)) return refuse('sender is not on this mission');
+    if (!this.running) return refused('this device is not running');
+    if (!this.bundle.roster.some((r) => r.actor === p?.from)) return refused('sender is not on this mission');
     const check = verifyPacket(p, { mission: this.mission });
-    if (!check.ok) return refuse(check.reason);
+    if (!check.ok) return refused(check.reason);
 
+    const firstSight = !this.ferrySeen.has(p.id);
     const result = this.log.ingestMany(p.events);
-    if (result.added.length) this.absorb(result.added);
-    this.heard[p.from] = Math.max(p.createdAt, this.heard[p.from] ?? 0);
-    const summary: FerryResult = {
-      newEvents: result.added.length - result.forks.length,
+    const newEvents = result.added.length - result.forks.length;
+    if (result.added.length) {
+      this.noteHeard(p.from, p.createdAt);
+      this.absorb(result.added);
+    }
+    this.onEvidence(p.summary);
+    this.ferrySeen.add(p.id);
+    this.metaDirty = true;
+    if (firstSight && newEvents > 0 && this.mayAct) {
+      this.emit('ferry.received', { packetId: p.id, from: p.from, events: p.events.length, newEvents });
+    }
+    this.sync?.nudge();
+    this.kick();
+    return {
+      newEvents,
       duplicates: result.duplicates,
       rejected: result.invalid.length + result.forks.length,
       buffered: result.gaps,
+      stale: this.now() - p.createdAt > FERRY_STALE_MS,
     };
-    if (!this.ferried.has(p.id)) {
-      this.emit('ferry.received', { packetId: p.id, from: p.from, events: p.events.length, newEvents: summary.newEvents });
-      this.sync?.nudge();
-      this.kick();
-    }
-    return summary;
   }
 }
 

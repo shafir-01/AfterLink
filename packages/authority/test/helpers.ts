@@ -79,7 +79,7 @@ export const capsule: MissionCapsule = {
       ],
     },
   ],
-  tasks: [],
+  tasks: [task('needs-first-aid', ['first-aid'])],
   contingencies: [],
   fallback: { coverAfterMs: 60000, coverMaxPriority: 2, humanApprovalKinds: [] },
   issuer: ISSUER,
@@ -110,29 +110,36 @@ export function stateOf(derived: DerivedTokens, tasks: Record<string, TaskRecord
 
 /**
  * One replica running one identity, with the envelope rules a real log enforces: per-actor seq and
- * hash chain, Lamport above everything seen, parents naming the heads of other actors.
+ * hash chain, parents naming everything it has seen from other actors. `clock` replaces the honest
+ * Lamport value, standing in for a signer that declares whatever it likes.
  */
 export class Device {
+  private static clones = 0;
   readonly events = new Map<EventId, AnyEvent>();
+  /** Keeps two devices on one key from ever signing byte-identical events, which would not be a fork. */
+  private wall = 0;
   private seq = 0;
   private prev: EventId | null = null;
-  private clock = 0;
-  private heads = new Map<ActorId, EventId>();
+  private lamport = 0;
+  private heads = new Set<EventId>();
 
-  constructor(readonly actor: ActorId) {}
+  constructor(
+    readonly actor: ActorId,
+    private readonly clock?: () => number,
+  ) {}
 
   emit<T extends EventType>(type: T, body: EventBodies[T], overrides: Partial<EventEnvelope<T>> = {}): EventEnvelope<T> {
     this.seq += 1;
-    this.clock += 1;
+    this.lamport += 1;
     const unsigned = {
       v: 1 as const,
       mission: capsule.id,
       actor: this.actor,
       seq: this.seq,
       prev: this.prev,
-      parents: [...this.heads].filter(([a]) => a !== this.actor).map(([, id]) => id).sort(),
-      lamport: this.clock,
-      wall: 0,
+      parents: [...this.heads].filter((id) => this.events.get(id)?.actor !== this.actor).sort(),
+      lamport: this.clock ? this.clock() : this.lamport,
+      wall: this.wall,
       type,
       body,
       ...overrides,
@@ -160,16 +167,22 @@ export class Device {
     return this.emit('right.declined', { transfer });
   }
 
+  note(label = 'ping') {
+    return this.emit('task.accepted', { taskId: label, via: 'tap' });
+  }
+
   receive(events: Iterable<AnyEvent>): void {
     for (const e of events) this.keep(e);
   }
 
-  /** A second device running the same key, as after a cloned install. */
+  /** A second device running the same key, as after a cloned install or a stale restore. */
   clone(): Device {
-    const twin = new Device(this.actor);
+    const twin = new Device(this.actor, this.clock);
     twin.receive(this.events.values());
     twin.seq = this.seq;
     twin.prev = this.prev;
+    twin.lamport = this.lamport;
+    twin.wall = ++Device.clones;
     return twin;
   }
 
@@ -188,8 +201,10 @@ export class Device {
   private keep(e: AnyEvent): void {
     if (this.events.has(e.id)) return;
     this.events.set(e.id, e);
-    this.clock = Math.max(this.clock, e.lamport);
-    this.heads.set(e.actor, e.id);
+    this.lamport = Math.max(this.lamport, e.lamport);
+    this.heads.add(e.id);
+    if (e.prev) this.heads.delete(e.prev);
+    for (const parent of e.parents) this.heads.delete(parent);
   }
 }
 
@@ -240,9 +255,17 @@ export function expectLegalChain(t: LedgerToken, events: Map<EventId, AnyEvent>)
       holder = e.type === 'right.accepted' ? open!.to : open!.from;
       state = 'held';
       open = null;
+    } else if (e.type === 'task.released') {
+      expect(state).toBe('committed');
+      expect(e.actor).toBe(holder);
+      state = 'held';
     } else {
       expect.unreachable(`unexpected ${e.type} in chain`);
     }
+  }
+  if (t.state === 'disputed') {
+    expect(t.holder).toBeNull();
+    return;
   }
   expect(t.state).toBe(state);
   expect(t.holder).toBe(holder);

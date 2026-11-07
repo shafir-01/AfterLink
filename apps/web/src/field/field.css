@@ -33,14 +33,14 @@
 
 .f-live { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-.f-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.f-top { flex-wrap: wrap; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .f-team { font-size: 15px; font-weight: 650; letter-spacing: 0.01em; min-width: 0; overflow-wrap: anywhere; }
 .f-conn { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; white-space: nowrap; }
 .f-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--f-off); }
 [data-conn='Connected'] .f-dot { background: var(--f-ok); }
 [data-conn='Team only'] .f-dot { background: var(--f-warn); }
 [data-conn='Alone'] .f-dot { background: transparent; box-shadow: inset 0 0 0 2px var(--f-off); }
-.f-heard { margin-top: -8px; text-align: right; font-size: 12px; color: var(--f-muted); }
+.f-heard { flex-basis: 100%; margin-top: -8px; text-align: right; font-size: 12px; color: var(--f-muted); }
 
 .f-main { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 0; min-height: 0; }
 .f-eyebrow { font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--f-muted); }
@@ -130,3 +130,6 @@
 .f-sub { font-size: 15px; color: var(--f-muted); }
 .f-paths { margin-top: var(--space-2); }
 .field .vo-caption { color: var(--f-muted); }
+.f-more-btn { min-height: 44px; border-radius: 12px; border: 1px solid var(--f-line); background: transparent; font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.f-menu-list { border-top: 0; padding-top: 0; flex-direction: column; }
+.f-menu-list button { width: 100%; }

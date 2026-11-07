@@ -60,6 +60,17 @@ describe('canonicalize', () => {
     );
   });
 
+  it('refuses hostile nesting without exhausting the stack', () => {
+    const nest = (depth: number) => {
+      let value: unknown = 1;
+      for (let i = 0; i < depth; i++) value = i % 2 ? [value] : { k: value };
+      return value;
+    };
+    expect(() => canonicalize(nest(32))).not.toThrow();
+    expect(() => canonicalize(nest(33))).toThrow(RangeError);
+    expect(() => canonicalize(nest(200_000))).toThrow(RangeError);
+  });
+
   it('keeps lone surrogates stable', () => {
     const text = canonicalize({ s: '\uD800' });
     expect(canonicalize(JSON.parse(text))).toBe(text);

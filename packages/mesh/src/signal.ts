@@ -45,7 +45,7 @@ export function portSignalClient(port: MessagePort, o: PortClientOptions = {}): 
   port.onmessage = (e: MessageEvent<HubFrame>) => {
     lastHeardAt = clock.now();
     listeners.setUp(true);
-    if (e.data?.t !== 'hb') listeners.emit(e.data);
+    if (e.data?.t !== 'hb') listeners.emit(e.data as SignalMessage);
   };
 
   const beat = () => {
@@ -152,7 +152,7 @@ export function wsSignalClient(url: string, o: WsClientOptions = {}): SignalClie
       } catch {
         return;
       }
-      if (frame?.t !== 'hb') listeners.emit(frame);
+      if (frame?.t !== 'hb') listeners.emit(frame as SignalMessage);
     };
     ws.onclose = () => lost(ws);
     ws.onerror = () => lost(ws);

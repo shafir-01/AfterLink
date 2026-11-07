@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-export type RouteName = 'stage' | 'device' | 'lead' | 'debrief' | 'compose';
+export type RouteName = 'stage' | 'device' | 'lead' | 'debrief' | 'compose' | 'verify';
 
 export interface Route {
   name: RouteName | 'unknown';
@@ -9,7 +9,7 @@ export interface Route {
   params: URLSearchParams;
 }
 
-const NAMES: RouteName[] = ['device', 'lead', 'debrief', 'compose'];
+const NAMES: RouteName[] = ['device', 'lead', 'debrief', 'compose', 'verify'];
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#\/?/, '');
@@ -19,6 +19,12 @@ export function parseRoute(hash: string): Route {
   const [head = '', ...rest] = path.split('/').filter(Boolean);
   if (!head) return { name: 'stage', rest, params };
   return { name: NAMES.find((name) => name === head) ?? 'unknown', rest, params };
+}
+
+/** Routes live in the hash, so any other path is a page that does not exist, wherever the host sent it. */
+export function atAppRoot(): boolean {
+  const here = window.location.pathname.replace(/\/(index\.html)?$/, '');
+  return here === import.meta.env.BASE_URL.replace(/\/$/, '');
 }
 
 export function navigate(path: string) {

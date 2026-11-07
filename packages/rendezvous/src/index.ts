@@ -2,6 +2,7 @@ export {
   acceptOffer,
   completeAnswer,
   createOfferPayload,
+  deviceFromBundle,
   refusal,
   RENDEZVOUS_LIMITS,
   DEFAULT_ANSWER_WAIT_MS,
@@ -23,7 +24,6 @@ export type {
 } from './session.ts';
 export { RelayedSignal, DEFAULT_MAX_HOPS } from './relay.ts';
 export type { RelayMesh, RelayMessage, RelayedSignalOptions } from './relay.ts';
-export { ChannelLink } from './link.ts';
 export { PayloadAssembler, isRendezvousFrame, payloadFrames } from './frames.ts';
 export { compactSdp, expandSdp, MAX_CANDIDATES } from './sdp.ts';
 export type { CandidateType, CompactCandidate, CompactSdp } from './sdp.ts';

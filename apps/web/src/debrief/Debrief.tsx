@@ -127,7 +127,7 @@ function Body({ events, hqSeen, record, roster, onResolve }: { events: AnyEvent[
       </section>
 
       {record.conflicts.length > 0 && (
-        <Conflict conflict={record.conflicts.find((c) => !c.resolved) ?? record.conflicts[0]} total={record.conflicts.length} record={record} roster={roster} onResolve={onResolve} />
+        <Conflict conflict={record.conflicts.find((c) => !c.resolved) ?? record.conflicts[0]!} total={record.conflicts.length} record={record} roster={roster} onResolve={onResolve} />
       )}
 
       {record.unknowns.length > 0 && (

@@ -10,6 +10,49 @@
   background: var(--bg-subtle);
   color: var(--fg);
 }
+.st-head {
+  grid-row: 1;
+}
+.st-hq {
+  grid-row: 2;
+}
+.st-theatre {
+  grid-row: 3;
+}
+.st-foot {
+  grid-row: 4;
+}
+
+/* The map fills the page. Everything else floats over it. */
+.st[data-world] {
+  --stage-inset-top: clamp(5rem, 13vh, 9rem);
+  --stage-inset-bottom: clamp(6.5rem, 15vh, 10rem);
+  position: relative;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.st-world {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.st[data-world] .st-head,
+.st[data-world] .st-foot {
+  z-index: 2;
+  pointer-events: none;
+}
+.st[data-world] .st-head {
+  position: relative;
+  padding-bottom: 1.5rem;
+  background: linear-gradient(var(--bg-subtle) 55%, transparent);
+}
+.st[data-world] .st-foot {
+  grid-row: 3;
+  padding-top: 2rem;
+  background: linear-gradient(transparent, var(--bg-subtle) 45%);
+}
+.st[data-world] .st-foot > * {
+  pointer-events: auto;
+}
 
 .st-head {
   display: grid;
@@ -19,7 +62,7 @@
   text-align: center;
 }
 .st-mission {
-  font-size: clamp(0.75rem, 0.6rem + 0.3vw, 1rem);
+  font-size: clamp(0.8125rem, 0.3rem + 0.72vw, 1.5rem);
   font-weight: 500;
   color: var(--fg-muted);
 }
@@ -50,7 +93,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-full);
   background: var(--bg-raised);
-  font-size: clamp(0.8125rem, 0.7rem + 0.28vw, 1.125rem);
+  font-size: clamp(0.8125rem, 0.3rem + 0.72vw, 1.5rem);
   white-space: nowrap;
   transition: background-color var(--dur-slow) var(--ease-out), color var(--dur-slow) var(--ease-out), border-color var(--dur-slow) var(--ease-out);
 }
@@ -134,29 +177,49 @@
 .st-hq-line {
   fill: none;
   stroke-linecap: round;
-  stroke-dasharray: 0.5 0 0.5;
-  transition: stroke-dasharray 620ms var(--ease-in-out), opacity 620ms var(--ease-out);
+  transition: opacity 620ms var(--ease-out);
 }
 .st-peer {
   stroke: var(--st-peer);
   stroke-width: 2;
-}
-.st-peer[data-state='forming'] {
-  stroke-dasharray: 0 1 0;
-  opacity: 0.3;
-}
-.st-peer[data-state='cut'] {
-  stroke-dasharray: 0 1 0;
-  opacity: 0;
 }
 .st-hq-line {
   stroke: var(--st-hq);
   stroke-width: 1.5;
   opacity: 0.7;
 }
-.st-hq-line[data-up='false'] {
+/* A link breaks from its middle back to both ends, and grows back the same way. */
+.st-peer[data-state='open'],
+.st-hq-line[data-up='true'] {
+  animation: st-link-grow 620ms var(--ease-in-out) both;
+}
+.st-peer[data-state='forming'] {
   stroke-dasharray: 0 1 0;
+  opacity: 0.3;
+}
+.st-peer[data-state='cut'],
+.st-hq-line[data-up='false'] {
   opacity: 0;
+  animation: st-link-cut 620ms var(--ease-in-out) both;
+}
+@keyframes st-link-grow {
+  from {
+    stroke-dasharray: 0 1 0;
+  }
+  99% {
+    stroke-dasharray: 0.5 0 0.5;
+  }
+  to {
+    stroke-dasharray: none;
+  }
+}
+@keyframes st-link-cut {
+  from {
+    stroke-dasharray: 0.5 0 0.5;
+  }
+  to {
+    stroke-dasharray: 0 1 0;
+  }
 }
 .st-pulse {
   fill: var(--st-peer);
@@ -214,12 +277,13 @@
   position: absolute;
   right: 0.35rem;
   bottom: calc(100% + 0.1rem);
+  min-height: 1.5rem;
   padding: 0.05rem 0.45rem;
   border: 0;
   border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
-  font-size: var(--text-caption);
+  font-size: clamp(0.8125rem, 0.3rem + 0.72vw, 1.375rem);
   font-weight: 500;
   opacity: 0;
   cursor: pointer;
@@ -274,13 +338,10 @@
   color: inherit;
   font: inherit;
   font-weight: 500;
-  opacity: 0.85;
+  min-height: 1.5rem;
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
-}
-.st-tag button:hover {
-  opacity: 1;
 }
 @keyframes st-land {
   from {
@@ -339,7 +400,7 @@
   display: flex;
   gap: 1.25em;
   padding-top: 0.9em;
-  font-size: clamp(0.8125rem, 0.7rem + 0.28vw, 1.125rem);
+  font-size: clamp(0.8125rem, 0.3rem + 0.72vw, 1.5rem);
   color: var(--fg-muted);
 }
 .st-counters b {
@@ -368,14 +429,14 @@
   cursor: pointer;
   transition: transform var(--dur-fast) var(--ease-out), opacity var(--dur-base) var(--ease-out);
 }
-.st-primary:hover:not(:disabled) {
+.st-primary:hover:not([aria-disabled='true']) {
   transform: scale(1.02);
 }
-.st-primary:active:not(:disabled) {
+.st-primary:active:not([aria-disabled='true']) {
   transform: scale(0.98);
 }
-.st-primary:disabled {
-  background: transparent;
+.st-primary[aria-disabled='true'] {
+  background: var(--bg-raised);
   color: var(--fg-muted);
   box-shadow: inset 0 0 0 1px var(--line-strong);
   cursor: progress;
@@ -384,29 +445,62 @@
   min-height: 1.4em;
   max-width: 44rem;
   color: var(--fg-muted);
-  font-size: clamp(0.875rem, 0.75rem + 0.32vw, 1.25rem);
+  font-size: clamp(0.9375rem, 0.35rem + 0.85vw, 1.75rem);
   line-height: 1.35;
   text-align: center;
   text-wrap: balance;
 }
+.st-line-why {
+  min-height: 1.5rem;
+  margin-left: 0.5em;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
 .st-aside {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 1.25em;
-  padding-top: 0.9em;
-  font-size: clamp(0.8125rem, 0.7rem + 0.28vw, 1rem);
+  min-width: 0;
+  padding-top: 0.6em;
+  font-size: clamp(0.8125rem, 0.3rem + 0.72vw, 1.5rem);
+}
+.st-aside .radio {
+  font-size: inherit;
+}
+.st-aside .radio-line {
+  position: absolute;
+  right: var(--st-pad);
+  bottom: 100%;
+  max-width: min(30rem, 42vw);
+  min-height: 0;
+  margin-bottom: 0.4rem;
+}
+.st-aside .radio-mute {
+  min-height: 1.75rem;
+  font-size: inherit;
 }
 .st-aside a,
-.st-aside button {
+.st-aside > button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
   padding: 0;
   border: 0;
   background: none;
   color: var(--fg-muted);
   text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
 }
 .st-aside a:hover,
-.st-aside button:hover {
+.st-aside > button:hover {
   color: var(--fg);
 }
 
@@ -479,7 +573,7 @@
   .st-theatre {
     margin-top: var(--space-2);
   }
-  .st-foot {
+  .st .st-foot {
     position: fixed;
     left: 0;
     right: 0;
@@ -502,5 +596,17 @@
   .st-aside {
     justify-content: center;
     padding: 0;
+  }
+  .st-aside a,
+  .st-aside > button {
+    min-height: 2.75rem;
+  }
+  .st[data-world] {
+    position: relative;
+    display: block;
+    height: 100dvh;
+    min-height: 0;
+    padding-bottom: 0;
+    overflow: hidden;
   }
 }

@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { register, SECRET_HEADER } from '../src/ingress/index.ts';
 import type { IngressMessage } from '../src/ingress/index.ts';
 
-const SECRET = 'test-secret-value';
+const SECRET = 'test-fixture';
 const body = (id = 'req-0001abcd') => ({
   sourceId: id,
   request: { title: 'Wheelchair user stuck at north gate', locationName: 'North gate' },

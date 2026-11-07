@@ -1,11 +1,16 @@
 import type { MissionRecord } from '@afterlink/protocol';
-
-const base = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_RELAY_URL ?? '').replace(/\/$/, '');
+import { relayBase, relayService, type RelayService } from '../relay';
 
 export type Remote<T> = { s: 'idle' } | { s: 'busy' } | { s: 'live'; value: T } | { s: 'unavailable'; reason: string };
 
+/** Names what is missing before anything is sent, so an absent relay is reported, not retried. */
+async function missing(service: RelayService): Promise<string | null> {
+  const state = await relayService(service);
+  return state === 'live' ? null : state === 'not-configured' ? 'Service not configured' : 'Relay not reachable';
+}
+
 async function post(path: string, body: unknown): Promise<unknown> {
-  const res = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await fetch(relayBase() + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) {
     const msg = await res.text().catch(() => '');
     throw new Error(res.status === 404 || res.status === 503 || res.status === 501 ? 'Service not configured' : msg.slice(0, 120) || `Error ${res.status}`);
@@ -16,6 +21,8 @@ async function post(path: string, body: unknown): Promise<unknown> {
 const reasonOf = (e: unknown) => (e instanceof TypeError ? 'Relay not reachable' : e instanceof Error ? e.message : 'Unavailable');
 
 export async function narrate(record: MissionRecord): Promise<Remote<string>> {
+  const reason = await missing('claude');
+  if (reason) return { s: 'unavailable', reason };
   try {
     const j = (await post('/api/debrief/narrate', { record })) as Record<string, unknown>;
     const text = [j.narrative, j.text, j.report].find((x) => typeof x === 'string' && x.trim()) as string | undefined;
@@ -24,6 +31,8 @@ export async function narrate(record: MissionRecord): Promise<Remote<string>> {
 }
 
 export async function sendReport(record: MissionRecord, narrative: string | null): Promise<Remote<string>> {
+  const reason = await missing('n8n');
+  if (reason) return { s: 'unavailable', reason };
   try {
     await post('/report/debrief', { record, narrative });
     return { s: 'live', value: 'Sent' };

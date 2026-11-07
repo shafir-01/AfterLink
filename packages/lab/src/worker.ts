@@ -41,6 +41,10 @@ export class FieldWorker {
     return this.known.has(task);
   }
 
+  tasks(): TaskId[] {
+    return [...this.known];
+  }
+
   give(task: TaskId, priority: number, durationMs: number): void {
     if (this.known.has(task)) return;
     this.known.add(task);
@@ -85,6 +89,7 @@ export class FieldWorker {
     const job = this.active;
     if (!job) return;
     this.active = null;
+    this.known.delete(job.task);
     this.onDone(job.task);
     this.pull();
   }

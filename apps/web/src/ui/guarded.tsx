@@ -1,19 +1,30 @@
 import { Component, lazy, type ComponentType, type ReactNode } from 'react';
+import { Button } from './Button';
 import { Stack } from './Stack';
 import { Text } from './Text';
 
 type Loader = () => Promise<unknown>;
 
-export function Unavailable({ title }: { title: string }) {
+/** A whole-page message: empty states, failures, and pages that do not exist. */
+export function Notice({ title, detail, action }: { title: string; detail?: string; action?: ReactNode }) {
   return (
     <main className="al-center">
-      <Stack gap={2} align="center">
-        <Text variant="title" as="h1">
+      <Stack gap={3} align="center">
+        <Text variant="heading" as="h1">
           {title}
         </Text>
-        <Text tone="muted">Not available in this build.</Text>
+        {detail ? <Text tone="muted">{detail}</Text> : null}
+        {action}
       </Stack>
     </main>
+  );
+}
+
+export function Loading() {
+  return (
+    <div className="al-center al-loading" role="status">
+      <Text tone="muted">Loading</Text>
+    </div>
   );
 }
 
@@ -33,7 +44,7 @@ function pick(modules: Record<string, Loader>, names: string[]): Loader | undefi
  */
 export function guardedView<P extends object>(modules: Record<string, Loader>, names: string[], exportName: string, title: string) {
   const load = pick(modules, names);
-  const fallback = () => <Unavailable title={title} />;
+  const fallback = () => <Notice title={`${title} unavailable`} />;
   return lazy(async (): Promise<{ default: ComponentType<P> }> => {
     if (!load) return { default: fallback };
     try {
@@ -59,6 +70,7 @@ export class ViewBoundary extends Component<{ title: string; children: ReactNode
   }
 
   override render() {
-    return this.state.failed ? <Unavailable title={this.props.title} /> : this.props.children;
+    if (!this.state.failed) return this.props.children;
+    return <Notice title={`${this.props.title} unavailable`} action={<Button onClick={() => window.location.reload()}>Reload</Button>} />;
   }
 }

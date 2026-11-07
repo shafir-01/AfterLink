@@ -71,7 +71,8 @@ interface Conn {
   actor: ActorId | null;
   room: string | null;
   nonce: string | null;
-  proved: boolean;
+  /** The one actor whose key this connection has proved. */
+  provedAs: ActorId | null;
 }
 
 /**
@@ -155,23 +156,20 @@ export function createHub(o: HubOptions = {}): Hub {
     const holder = rooms.get(roomName)?.get(actor);
     if (sig === undefined) {
       challenge(conn);
-      if (requireProof || (holder?.proved && holder !== conn)) return;
+      if (requireProof && conn.provedAs !== actor) return;
+      if (holder && holder !== conn && holder.provedAs === actor) return;
     } else {
       const nonce = conn.nonce;
       conn.nonce = null;
       if (!nonce || m.nonce !== nonce || !provesKey(actor, roomName, nonce, sig)) return;
-      conn.proved = true;
+      conn.provedAs = actor;
       if (holder === conn) {
         actorRecord(actor).proved = true;
         changed();
         return;
       }
     }
-    if (conn.actor !== actor || conn.room !== roomName) {
-      const proved = conn.proved;
-      leave(conn);
-      conn.proved = proved;
-    }
+    if (conn.actor !== actor || conn.room !== roomName) leave(conn);
     let room = rooms.get(roomName);
     if (!room) {
       room = new Map();
@@ -188,7 +186,7 @@ export function createHub(o: HubOptions = {}): Hub {
     const record = actorRecord(actor);
     record.room = roomName;
     record.connected = true;
-    record.proved = conn.proved;
+    record.proved = conn.provedAs === actor;
     record.lastConfirmedAt = now();
     deliver(conn, { t: 'peers', peers: [...room.keys()].filter((a) => a !== actor) });
     toRoom(room, actor, { t: 'joined', actor });
@@ -248,7 +246,7 @@ export function createHub(o: HubOptions = {}): Hub {
 
   return {
     connect(send) {
-      const conn: Conn = { send, actor: null, room: null, nonce: null, proved: false };
+      const conn: Conn = { send, actor: null, room: null, nonce: null, provedAs: null };
       return {
         receive(frame) {
           const m = frame as HubFrame;

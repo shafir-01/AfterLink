@@ -88,26 +88,51 @@ export interface Rights { resource: string; name: string; basis: string; tokens:
 interface Draft {
   name: string; objective: string; objectives: unknown[]; teams: unknown[];
   resources: { id: string; name: string; basis: string; tokens: { id: string; holderTeam: string }[] }[];
-  tasks: { needs: { resource: string; count: number }[] }[];
+  tasks: { id: string; needs: { resource: string; count: number }[]; dependsOn?: string[] }[];
   contingencies: { id: string; key: string; equals: unknown; blockKinds: string[]; note: string }[];
   fallback: unknown;
 }
 
-/** Builds the capsule. Any resource whose quoted basis is not in the organiser's own text is removed. */
-export function assemble(d: Draft, source: string, issuer: string): { capsule: unknown; rights: Rights[]; rejectedRights: string[] } {
+const NUMBER_WORDS: Record<string, number> = { a: 1, an: 1, one: 1, single: 1, two: 2, pair: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const MIN_BASIS = 8;
+
+/** The quantity a quote states: the largest number or number word in it, else one. */
+export function quotedCount(basis: string): number {
+  const found = norm(basis).split(' ').flatMap((w) => (/^\d+$/.test(w) ? [Number(w)] : w in NUMBER_WORDS ? [NUMBER_WORDS[w]!] : []));
+  return found.length ? Math.max(...found) : 1;
+}
+
+const names = (r: { id: string; name: string }) => [norm(r.name), norm(r.id.replace(/[-_]+/g, ' '))].filter((n) => n.length > 1);
+
+/** A resource stands only if the organiser's own words, at some length, name it and cover every token. */
+function backed(r: Draft['resources'][number], hay: string): boolean {
+  const basis = norm(r.basis);
+  if (basis.length < MIN_BASIS || !hay.includes(basis)) return false;
+  const singular = (n: string) => n.replace(/s$/, '');
+  if (!names(r).some((n) => basis.includes(n) || basis.includes(singular(n)))) return false;
+  return r.tokens.length >= 1 && r.tokens.length <= quotedCount(r.basis);
+}
+
+/** Builds the capsule. A resource without a backing quote is removed, and so is every task that needed it or depends on such a task. */
+export function assemble(d: Draft, source: string, issuer: string): { capsule: unknown; rights: Rights[]; rejectedRights: string[]; droppedTasks: string[] } {
   const hay = norm(source);
-  const kept = d.resources.filter((r) => norm(r.basis).length > 0 && hay.includes(norm(r.basis)));
+  const kept = d.resources.filter((r) => backed(r, hay));
   const keptIds = new Set(kept.map((r) => r.id));
   const rejectedRights = d.resources.filter((r) => !keptIds.has(r.id)).map((r) => r.id);
   const rights = kept.map((r) => ({ resource: r.id, name: r.name, basis: r.basis, tokens: r.tokens.length, holders: [...new Set(r.tokens.map((t) => t.holderTeam))] }));
+  const gone = new Set(d.tasks.filter((t) => t.needs.some((n) => !keptIds.has(n.resource))).map((t) => t.id));
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const t of d.tasks) if (!gone.has(t.id) && (t.dependsOn ?? []).some((x) => gone.has(x))) { gone.add(t.id); grew = true; }
+  }
   const capsule = {
     v: 1, id: `draft-${randomUUID()}`, version: 1, name: d.name, objective: d.objective, objectives: d.objectives, teams: d.teams,
     resources: kept.map((r) => ({ id: r.id, name: r.name, tokens: r.tokens })),
-    tasks: d.tasks.map((t) => ({ ...t, needs: t.needs.filter((n) => keptIds.has(n.resource)) })),
+    tasks: d.tasks.filter((t) => !gone.has(t.id)),
     contingencies: d.contingencies.map((c) => ({ id: c.id, when: { key: c.key, equals: c.equals }, then: { blockKinds: c.blockKinds, note: c.note } })),
     fallback: d.fallback, issuer, issuedAt: Date.now(),
   };
-  return { capsule, rights, rejectedRights };
+  return { capsule, rights, rejectedRights, droppedTasks: [...gone] };
 }
 
 const CAPS = { teams: 12, resources: 20, tokensPerResource: 50, tasks: 60, objectives: 12, contingencies: 20 };
@@ -147,10 +172,10 @@ export function registerCompile(app: Hono, ctx: AiContext): void {
         fb.coverAfterMs = clamp(fb.coverAfterMs, 1000, 3_600_000);
         fb.coverMaxPriority = clamp(fb.coverMaxPriority, 1, 3);
       }
-      const { capsule, rights, rejectedRights } = big.length ? { capsule: null, rights: [], rejectedRights: [] } : assemble(data.capsule, source, body.issuer);
+      const { capsule, rights, rejectedRights, droppedTasks } = big.length ? { capsule: null, rights: [], rejectedRights: [], droppedTasks: [] } : assemble(data.capsule, source, body.issuer);
       const v = big.length ? { ok: false as const, errors: big } : validateCapsule(capsule);
       if (v.ok) {
-        return { body: { status: 'draft', capsule: v.capsule as MissionCapsule, rights, rejectedRights, approvalRequired: rights.length > 0, meta } };
+        return { body: { status: 'draft', capsule: v.capsule as MissionCapsule, rights, rejectedRights, droppedTasks, approvalRequired: rights.length > 0, meta } };
       }
       errors = v.errors;
       messages.push({ role: 'assistant', content: out.text }, { role: 'user', content: `The draft failed validation. Fix these and return the full result again:\n${errors.join('\n')}` });

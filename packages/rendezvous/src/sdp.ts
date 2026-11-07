@@ -90,12 +90,7 @@ function candidateLine(c: CompactCandidate, index: number): string {
   return `a=candidate:${index + 1} 1 udp ${priority} ${c.address} ${c.port} typ ${c.type}${related}`;
 }
 
-/**
- * Rebuilds a remote description. The offer is declared `active` even though the offerer really
- * sent `actpass`, so the answerer goes passive and the offerer opens DTLS the moment its person
- * scans the reply. With default roles the answerer would start DTLS early and back off
- * exponentially while the QR is still being carried, stalling the link for many seconds.
- */
+/** Rebuilds a remote description from the fixed template. */
 export function expandSdp(c: CompactSdp, role: 'offer' | 'answer'): string {
   return [
     'v=0',
@@ -110,7 +105,7 @@ export function expandSdp(c: CompactSdp, role: 'offer' | 'answer'): string {
     `a=ice-ufrag:${c.ufrag}`,
     `a=ice-pwd:${c.pwd}`,
     `a=fingerprint:${c.hash} ${fingerprintText(c.fingerprint)}`,
-    `a=setup:${role === 'offer' ? 'active' : 'passive'}`,
+    `a=setup:${role === 'offer' ? 'actpass' : 'active'}`,
     `a=mid:${c.mid}`,
     'a=sctp-port:5000',
     'a=max-message-size:262144',

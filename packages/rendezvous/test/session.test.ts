@@ -4,6 +4,7 @@ import {
   acceptOffer,
   completeAnswer,
   createOfferPayload,
+  deviceFromBundle,
   type AcceptedOffer,
   type PendingOffer,
   type RendezvousDevice,
@@ -63,8 +64,9 @@ describe('reconnect by QR', () => {
 
     const states: string[] = [];
     far.link.onState((s) => states.push(s));
+    await expect.poll(() => states).toEqual(['open']);
     done.link.close('closed');
-    await expect.poll(() => states).toEqual(['closed']);
+    await expect.poll(() => states).toEqual(['open', 'closed']);
     expect(far.link.state).toBe('closed');
   });
 
@@ -162,6 +164,35 @@ describe('reconnect by QR', () => {
     const net = new FakeNetwork();
     net.candidates = [];
     expect(await createOfferPayload(device(net, alice))).toMatchObject({ ok: false, reason: 'no-local-network', next: 'CARRY_UPDATE' });
+  });
+
+  it('leaves a code usable when this device had no network at the moment of scanning', async () => {
+    const net = new FakeNetwork();
+    const offer = await showOffer(device(net, alice));
+    const offline = new FakeNetwork();
+    offline.candidates = [];
+    const seen = new Set<string>();
+    refused(await acceptOffer(device(offline, bob, { seen }), offer.text), 'no-local-network');
+    expect(await acceptOffer(device(net, bob, { seen }), offer.text)).toMatchObject({ ok: true });
+  });
+
+  it('turns a description the browser rejects into a refusal', async () => {
+    const net = new FakeNetwork();
+    const offer = await showOffer(device(net, alice));
+    const broken: RendezvousDevice = {
+      ...device(net, bob),
+      createConnection: () => {
+        const pc = net.factory();
+        pc.setRemoteDescription = () => Promise.reject(new Error('rejected'));
+        return pc;
+      },
+    };
+    refused(await acceptOffer(broken, offer.text), 'malformed');
+  });
+
+  it('builds a device from a provisioned bundle', () => {
+    const bundle = { actor: alice, genesis: { mission }, roster } as unknown as Parameters<typeof deviceFromBundle>[0];
+    expect(deviceFromBundle(bundle, { gatherMs: 5 })).toMatchObject({ keys: alice, mission, roster, gatherMs: 5 });
   });
 
   it('cannot complete after the offer is cancelled', async () => {

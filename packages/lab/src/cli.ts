@@ -1,9 +1,10 @@
 import { fork } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { narrative, oneLineClaim } from './narrative.ts';
+import { displayRows, narrative, oneLineClaim } from './narrative.ts';
 import { aggregate, headline, renderSummary, type ResultsFile } from './report.ts';
 import { runScenario, runSeed, type RunRecord } from './run.ts';
 import { FAMILIES, TIMING, generateScenario, type FamilyId } from './scenario.ts';
@@ -69,10 +70,22 @@ async function runAll(jobs: Job[], systems: SystemId[], workers: number): Promis
   return { records, failures };
 }
 
+/** Fingerprint of the code that produced the numbers. */
+function sourceDigest(): string {
+  const hash = createHash('sha256');
+  for (const pkg of ['protocol', 'authority', 'mission', 'planner', 'reconcile', 'mesh', 'ferry', 'actor', 'lab']) {
+    const dir = join(repoRoot, 'packages', pkg, 'src');
+    for (const name of readdirSync(dir).sort()) {
+      if (name.endsWith('.ts')) hash.update(name).update(readFileSync(join(dir, name)));
+    }
+  }
+  return hash.digest('hex').slice(0, 16);
+}
+
 async function replay(spec: string): Promise<void> {
   const [family, seed, system] = spec.split(':') as [FamilyId, string, SystemId];
-  const { trace, metrics } = await runScenario(generateScenario(family, Number(seed)), system);
-  process.stdout.write(`${JSON.stringify({ metrics, trace }, null, 1)}\n`);
+  const { trace, metrics, attacks, violations } = await runScenario(generateScenario(family, Number(seed)), system);
+  process.stdout.write(`${JSON.stringify({ metrics, attacks, violations, trace }, null, 1)}\n`);
 }
 
 async function main(): Promise<void> {
@@ -99,6 +112,8 @@ async function main(): Promise<void> {
   const file: ResultsFile = {
     meta: {
       generatedAt: new Date().toISOString(),
+      sourceDigest: sourceDigest(),
+      failedSeeds: failures.map((f) => f.split(': ')[0] as string),
       runsPerFamily: runs,
       baseSeed,
       families,
@@ -113,7 +128,7 @@ async function main(): Promise<void> {
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, 'results.json'), JSON.stringify(file));
   writeFileSync(join(out, 'SUMMARY.md'), renderSummary(file, narrative(file)));
-  writeFileSync(join(out, 'headline.json'), `${JSON.stringify(headline(file, oneLineClaim(file)), null, 2)}\n`);
+  writeFileSync(join(out, 'headline.json'), `${JSON.stringify(headline(file, oneLineClaim(file), displayRows(file)), null, 2)}\n`);
   process.stderr.write(`${records.length} runs written to ${out}. Failed seeds: ${failures.length}\n`);
   for (const f of failures.slice(0, 10)) process.stderr.write(`${f}\n`);
   if (failures.length) process.exitCode = 1;

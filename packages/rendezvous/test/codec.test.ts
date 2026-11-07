@@ -82,12 +82,12 @@ describe('SDP compression', () => {
     const rebuilt = expandSdp(c, 'offer');
     expect(rebuilt).toContain('m=application 9 UDP/DTLS/SCTP webrtc-datachannel');
     expect(rebuilt).toContain(`a=fingerprint:sha-256 ${FINGERPRINT}`);
-    expect(rebuilt).toContain('a=setup:active');
+    expect(rebuilt).toContain('a=setup:actpass');
     expect(rebuilt).toContain('raddr 0.0.0.0 rport 0');
     expect(rebuilt.endsWith('\r\n')).toBe(true);
     expect(compactSdp(rebuilt)).toEqual(c);
     expect(compactSdp(expandSdp(c, 'answer'))).toEqual(c);
-    expect(expandSdp(c, 'answer')).toContain('a=setup:passive');
+    expect(expandSdp(c, 'answer')).toContain('a=setup:active');
   });
 
   it('reads a description with session-level fingerprint and upper case transport', () => {

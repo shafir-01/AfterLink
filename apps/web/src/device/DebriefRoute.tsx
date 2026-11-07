@@ -1,8 +1,6 @@
 import { Suspense, useEffect, useState } from 'react';
 import { loadDebriefInput, type DebriefInput } from '../bridge/missionStore';
-import { guardedView } from '../ui/guarded';
-import { Stack } from '../ui/Stack';
-import { Text } from '../ui/Text';
+import { guardedView, Notice } from '../ui/guarded';
 
 const Debrief = guardedView<DebriefInput>(import.meta.glob('../debrief/{index,Debrief}.{ts,tsx}'), ['index', 'Debrief'], 'Debrief', 'Debrief');
 
@@ -20,18 +18,7 @@ export default function DebriefRoute() {
   }, []);
 
   if (input === undefined) return null;
-  if (input === null) {
-    return (
-      <main className="al-center">
-        <Stack gap={2} align="center">
-          <Text variant="title" as="h1">
-            No mission to review
-          </Text>
-          <Text tone="muted">Run a mission first.</Text>
-        </Stack>
-      </main>
-    );
-  }
+  if (input === null) return <Notice title="No mission to review" />;
   return (
     <Suspense fallback={null}>
       <Debrief {...input} />

@@ -128,6 +128,25 @@ export class Stage {
     return out;
   }
 
+  /** Exactly what the stage handed the debrief route. */
+  debriefInput(): Promise<{ events: AnyEvent[]; hqSeen: EventId[]; episodes: unknown[] } | null> {
+    return this.page.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const open = indexedDB.open('afterlink-stage', 1);
+          open.onerror = () => reject(open.error);
+          open.onsuccess = () => {
+            const get = open.result.transaction('kv', 'readonly').objectStore('kv').get('debrief');
+            get.onerror = () => reject(get.error);
+            get.onsuccess = () => {
+              open.result.close();
+              resolve(get.result ?? null);
+            };
+          };
+        }),
+    );
+  }
+
   /** The hash of each device's per-actor heads: equal strings mean identical logs. */
   async heads(): Promise<Record<string, string>> {
     const views = await this.views();

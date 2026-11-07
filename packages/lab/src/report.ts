@@ -17,6 +17,8 @@ interface MetricInfo {
 export const METRICS: MetricInfo[] = [
   { key: 'completedDuringOutage', label: 'Tasks completed during outage', better: 'higher' },
   { key: 'p1CompletedDuringOutage', label: 'Priority-1 tasks completed during outage', better: 'higher' },
+  { key: 'p1ReportedDuringOutage', label: 'Priority-1 tasks reported during outage', better: null },
+  { key: 'tasksReported', label: 'Tasks reported, whole run', better: null },
   { key: 'tasksCompleted', label: 'Tasks completed, whole run', better: 'higher' },
   { key: 'decidedInWindow', label: 'Runs with a decision before the window closed', better: 'higher', unit: 'share' },
   { key: 'firstDecisionMs', label: 'Time to first useful decision after the cut', better: 'lower', unit: 'ms' },
@@ -27,14 +29,17 @@ export const METRICS: MetricInfo[] = [
   { key: 'lostCompletions', label: 'Finished tasks missing from the merged record', better: 'lower' },
   { key: 'conservationBreaches', label: 'Resource conservation breaches', better: 'lower' },
   { key: 'attacksAccepted', label: 'Attacks that changed state', better: 'lower' },
-  { key: 'duplicateEffects', label: 'Duplicate deliveries that changed state', better: 'lower' },
+  { key: 'unauthorisedCommits', label: 'Tokens spent by a non-holder (independent replay)', better: 'lower' },
+  { key: 'replayDivergence', label: 'Runs where replaying the record twice changed it', better: 'lower' },
   { key: 'unsafeAllocationsRefused', label: 'Unsafe allocations refused', better: null },
   { key: 'refusalsConfirmedByTruth', label: 'Refusals ground truth confirms', better: null },
   { key: 'duplicateEffortTasks', label: 'Tasks finished by two teams', better: 'lower' },
   { key: 'converged', label: 'Runs that converged', better: 'higher', unit: 'share' },
   { key: 'reconcileMs', label: 'Time from heal to convergence', better: 'lower', unit: 'ms' },
   { key: 'bytesToReconcile', label: 'Bytes sent from heal to convergence', better: 'lower', unit: 'bytes' },
+  { key: 'observerBytesToReconcile', label: 'Of which backfilling the observer', better: null, unit: 'bytes' },
   { key: 'bytesTotal', label: 'Bytes sent, whole run', better: 'lower', unit: 'bytes' },
+  { key: 'rightsInTransit', label: 'Rights still in transit at the end', better: null },
   { key: 'conflictsSurfaced', label: 'Conflicts surfaced after merge', better: null },
   { key: 'conflictsUnresolved', label: 'Conflicts left for a human', better: null },
   { key: 'silentOverwrites', label: 'Contested writes overwritten with no record', better: 'lower' },
@@ -88,6 +93,9 @@ export function aggregate(runs: RunRecord[]): Summary {
 
 export interface Meta {
   generatedAt: string;
+  /** SHA-256 over the source of every package these runs executed. */
+  sourceDigest: string;
+  failedSeeds: string[];
   runsPerFamily: number;
   baseSeed: number;
   families: FamilyId[];
@@ -117,6 +125,7 @@ function fmt(x: number, unit?: MetricInfo['unit']): string {
 }
 
 function cell(s: MetricSummary | undefined, m: MetricInfo): string {
+  if (s && s.n === 0 && s.missing > 0) return `none in ${s.missing} of ${s.missing} runs`;
   if (!s || s.mean === null || !s.ci95) return 'n/a';
   if (m.unit === 'share') {
     const wilsonCi = s.nonZeroShare95;
@@ -174,39 +183,121 @@ export function unfavourable(summary: Summary, families: FamilyId[]): Finding[] 
   return out;
 }
 
+const ATTACK_LABELS: Record<string, string> = {
+  'forged-signature': 'Event claiming a peer, signed by an outsider',
+  'tampered-body': 'Real event with its body altered',
+  'outsider-key': 'Well-signed event from a key not on the roster',
+  'replayed-events': 'Old events sent again',
+  'forged-packet': 'Carried packet with altered contents',
+  'replayed-packet': 'Carried packet delivered again',
+  'insider-fork': 'Compromised custodian signs two spends of one token',
+};
+
+/** Counts of each outcome, per attack and system, straight from the raw runs. */
+export function attackTable(runs: RunRecord[]): Record<string, Partial<Record<SystemId, Record<string, number>>>> {
+  const out: Record<string, Partial<Record<SystemId, Record<string, number>>>> = {};
+  for (const run of runs) {
+    for (const a of run.attacks ?? []) {
+      const counts = ((out[a.attack] ??= {})[run.system] ??= {});
+      counts[a.outcome] = (counts[a.outcome] ?? 0) + 1;
+    }
+  }
+  return out;
+}
+
+/** Violations the product raised, by family and kind, with one replayable seed for each. */
+function renderDefects(file: ResultsFile): string[] {
+  const groups = new Map<string, { runs: number; seed: number }>();
+  const stuck = new Map<FamilyId, { runs: number; seed: number }>();
+  for (const r of file.runs) {
+    if (r.system !== 'afterlink') continue;
+    for (const kind of new Set(r.violations ?? [])) {
+      const key = `${r.family}|${kind}`;
+      const g = groups.get(key) ?? { runs: 0, seed: r.seed };
+      g.runs++;
+      groups.set(key, g);
+    }
+    if (!r.metrics.converged) {
+      const g = stuck.get(r.family) ?? { runs: 0, seed: r.seed };
+      g.runs++;
+      stuck.set(r.family, g);
+    }
+  }
+  const lines = ['## Known defects', ''];
+  if (groups.size === 0 && stuck.size === 0) {
+    lines.push('AfterLink raised no violation and every run converged.', '');
+    return lines;
+  }
+  lines.push('Everything AfterLink itself flagged as a violation, and every run that did not converge. In `forged-replay` violations are the expected result of the attack. Anywhere else they are defects in the product.', '');
+  lines.push('| Family | What | Runs | Replay |', '|---|---|---|---|');
+  for (const [key, g] of groups) {
+    const [family, kind] = key.split('|') as [FamilyId, string];
+    lines.push(`| ${family} | ${kind} | ${g.runs} of ${file.meta.runsPerFamily} | \`--replay ${family}:${g.seed}:afterlink\` |`);
+  }
+  for (const [family, g] of stuck) lines.push(`| ${family} | did not converge | ${g.runs} of ${file.meta.runsPerFamily} | \`--replay ${family}:${g.seed}:afterlink\` |`);
+  lines.push('');
+  return lines;
+}
+
+function renderAttacks(file: ResultsFile): string[] {
+  const table = attackTable(file.runs);
+  const names = Object.keys(table);
+  if (names.length === 0) return [];
+  const lines = ['## Attack outcomes', ''];
+  lines.push('Counts over all `forged-replay` runs. rejected: refused at the door. no-effect: taken in and changed nothing. detected: took effect and was surfaced as a violation. accepted: took effect silently. assumed: not exercised, because that baseline is given authenticated channels by assumption. not-applicable: the system has no such path.', '');
+  lines.push(`| Attack | ${file.meta.systems.map((s) => SYSTEM_LABELS[s]).join(' | ')} |`, `|---|${file.meta.systems.map(() => '---').join('|')}|`);
+  for (const name of names) {
+    const cells = file.meta.systems.map((s) => Object.entries(table[name]?.[s] ?? {}).map(([k, n]) => `${k} ${n}`).join(', ') || 'none');
+    lines.push(`| ${ATTACK_LABELS[name] ?? name} | ${cells.join(' | ')} |`);
+  }
+  lines.push('');
+  return lines;
+}
+
 export function renderSummary(file: ResultsFile, narrative: string): string {
   const { meta, summary } = file;
   const lines: string[] = [];
   lines.push('# AfterLink Continuity: fault lab results', '');
   lines.push(`Generated ${meta.generatedAt} by \`npx tsx packages/lab/src/cli.ts --runs ${meta.runsPerFamily}\`. ${meta.families.length} scenario families, ${meta.runsPerFamily} seeded runs per family, ${meta.systems.length} systems on each seed, ${file.runs.length} runs in total. Node ${meta.node}. ${meta.wallSeconds} s of real time.`, '');
   lines.push('Every figure below is computed from `docs/results/results.json`. Replay any single run with `npx tsx packages/lab/src/cli.ts --replay <family>:<seed>:<system>`.', '');
+  if (meta.failedSeeds.length > 0) lines.push(`**${meta.failedSeeds.length} seeds failed to run and are missing from every figure below:** ${meta.failedSeeds.slice(0, 10).join(', ')}.`, '');
   lines.push(narrative, '');
 
   lines.push('## Where AfterLink lost', '');
-  lines.push('Generated from the data: every metric where AfterLink is worse than a baseline with non-overlapping 95% intervals.', '');
+  lines.push('Generated from the data: every metric where AfterLink is worse than a baseline with non-overlapping 95% intervals. Metrics with no better or worse direction are left out.', '');
   const bad = unfavourable(summary, meta.families);
   if (bad.length === 0) {
     lines.push('None.', '');
   } else {
-    lines.push('| Family | Metric | AfterLink | Baseline | Baseline value |', '|---|---|---|---|---|');
-    for (const f of bad) lines.push(`| ${f.family} | ${f.label} | ${f.afterlink} | ${SYSTEM_LABELS[f.baseline]} | ${f.baselineValue} |`);
+    const byMetric = new Map<string, Finding[]>();
+    for (const f of bad) byMetric.set(f.label, [...(byMetric.get(f.label) ?? []), f]);
+    lines.push('| Metric | Against | Families |', '|---|---|---|');
+    for (const [label, rows] of byMetric) {
+      for (const baseline of ['central', 'board'] as SystemId[]) {
+        const mine = rows.filter((r) => r.baseline === baseline);
+        if (mine.length) lines.push(`| ${label} | ${SYSTEM_LABELS[baseline]} | ${mine.length === meta.families.length ? 'all' : mine.map((r) => r.family).join(', ')} |`);
+      }
+    }
     lines.push('');
+    lines.push('Figures for each are in the family tables below.', '');
   }
+  lines.push(...renderDefects(file));
 
   lines.push('## Results by family', '');
-  lines.push('Cells are mean [95% interval]. Rates are shown with a Wilson interval. A count that is zero in every run shows the 95% upper bound on how often it could occur. "none in k of n" means k runs had no value, and those runs are excluded from the mean, not counted as zero.', '');
+  lines.push('Cells are mean [95% interval]. Rates are shown with a Wilson interval. A count that is zero in every run shows the 95% upper bound on how often it could occur. "none in k of n" means k runs had no value (for example, no decision before the window closed), and those runs are excluded from the mean, not counted as zero.', '');
   for (const family of meta.families) {
     const fam = summary[family];
     if (!fam) continue;
     lines.push(`### ${FAMILY_LABELS[family]} (\`${family}\`)`, '');
     lines.push(`| Metric | ${meta.systems.map((s) => SYSTEM_LABELS[s]).join(' | ')} |`, `|---|${meta.systems.map(() => '---').join('|')}|`);
     for (const m of METRICS) {
+      if (meta.systems.every((s) => !fam[s]?.[m.key]?.n)) continue;
       const cells = meta.systems.map((s) => cell(fam[s]?.[m.key], m));
-      if (cells.every((c) => c === 'n/a')) continue;
       lines.push(`| ${m.label} | ${cells.join(' | ')} |`);
     }
     lines.push('');
   }
+  lines.push(...renderAttacks(file));
   return lines.join('\n');
 }
 
@@ -229,7 +320,8 @@ export interface HeadlineCard {
   values: Partial<Record<SystemId, HeadlineValue>>;
 }
 
-export interface Headline {
+/** Display rows come first: the debrief lists the first scalar fields it finds, label then value. */
+export type Headline = Record<string, unknown> & {
   generatedAt: string;
   source: 'docs/results/results.json';
   runsPerFamily: number;
@@ -240,7 +332,7 @@ export interface Headline {
   cards: HeadlineCard[];
   /** Metrics where AfterLink did worse, kept next to the wins on purpose. */
   unfavourable: { family: FamilyId; label: string; afterlink: string; baseline: string; baselineValue: string }[];
-}
+};
 
 const CARDS: { id: string; label: string; family: FamilyId; metric: MetricKey }[] = [
   { id: 'completed', label: 'Tasks completed during the outage', family: 'hub-death-split', metric: 'completedDuringOutage' },
@@ -254,7 +346,7 @@ const CARDS: { id: string; label: string; family: FamilyId; metric: MetricKey }[
   { id: 'conflicts', label: 'Conflicts shown after merge', family: 'hub-death-split', metric: 'conflictsSurfaced' },
 ];
 
-export function headline(file: ResultsFile, claim: string): Headline {
+export function headline(file: ResultsFile, claim: string, rows: Record<string, string>): Headline {
   const { meta, summary } = file;
   const cards: HeadlineCard[] = [];
   for (const c of CARDS) {
@@ -271,6 +363,7 @@ export function headline(file: ResultsFile, claim: string): Headline {
     cards.push({ id: c.id, label: c.label, family: c.family, familyLabel: FAMILY_LABELS[c.family], metric: c.metric, unit: info.unit ?? 'count', better: info.better, values });
   }
   return {
+    ...rows,
     generatedAt: meta.generatedAt,
     source: 'docs/results/results.json',
     runsPerFamily: meta.runsPerFamily,
