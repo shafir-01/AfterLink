@@ -1,0 +1,56 @@
+.al-provision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-4) calc(var(--space-7) + env(safe-area-inset-bottom));
+}
+
+.al-provision__teams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0 calc(var(--space-3) * -1);
+}
+
+.al-provision__team {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.al-provision__team:hover {
+  background: var(--bg-subtle);
+}
+
+.al-provision__team[aria-pressed='true'] {
+  background: var(--bg-subtle);
+}
+
+.al-provision__team[aria-pressed='true'] .al-badge {
+  color: var(--fg);
+}
+
+.al-provision__team .al-badge {
+  font-size: var(--text-label);
+}
+
+.al-provision__code {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-m);
+  background: #ffffff;
+  image-rendering: pixelated;
+}
+
+.al-provision__code[hidden] {
+  display: none;
+}
