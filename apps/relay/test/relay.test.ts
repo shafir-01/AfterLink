@@ -108,7 +108,7 @@ describe('http', () => {
     expect(await get('https://evil.example.com')).toBeNull();
   });
   it('rate limits by forwarded ip', async () => {
-    const { base } = await boot({ AFTERLINK_RATE_PER_MINUTE: '3' });
+    const { base } = await boot({ AFTERLINK_RATE_PER_MINUTE: '3', AFTERLINK_TRUST_PROXY_HOPS: '1' });
     const codes: number[] = [];
     for (let i = 0; i < 5; i++) {
       codes.push((await fetch(`${base}/health`, { headers: { 'x-forwarded-for': '9.9.9.9' } })).status);
