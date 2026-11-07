@@ -167,6 +167,9 @@ test('a real phone keeps voice prefetch bounded across task changes when the rel
   const bundles = provisionMission(`voice-${Date.now()}`);
   const context = await browser.newContext();
   await instrument(context);
+  await context.route('**/api/status', (route) =>
+    route.fulfill({ headers: { 'access-control-allow-origin': '*' }, json: { ok: true, services: { elevenlabs: true } } }),
+  );
   const calls: string[] = [];
   await context.route('**/api/voice/brief', (route) => {
     const req = route.request();

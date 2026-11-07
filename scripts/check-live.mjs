@@ -23,9 +23,9 @@ try {
   const { res, ms } = await get(base + '/')
   const html = await res.text()
   report(res.ok && /<div id=["']root["']|<script/i.test(html), 'page loads', `${res.status} in ${ms} ms`)
-  const assets = [...html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g)].map((m) => m[1])
+  const assets = [...html.matchAll(/(?:src|href)=["']([^"']*\/assets\/[^"']+)["']/g)].map((m) => m[1])
   for (const a of assets.slice(0, 4)) {
-    const r = await get(base + a)
+    const r = await get(new URL(a, base + '/').href)
     report(r.res.ok, `asset ${a}`, String(r.res.status))
   }
 } catch (e) {

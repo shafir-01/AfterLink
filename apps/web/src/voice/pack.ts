@@ -71,6 +71,7 @@ export class VoicePack {
   private doFetch: typeof fetch;
   private available: () => Promise<boolean>;
   private pausedUntil = 0;
+  private prepared = new Set<string>();
   private gen = 0;
 
   constructor(o: VoicePackOptions = {}) {
@@ -153,6 +154,15 @@ export class VoicePack {
     };
     await Promise.all([worker(), worker(), worker()]);
     return p;
+  }
+
+  /** Once per mission and team, however often a view remounts. A run that fell short may run again. */
+  prepareOnce(id: string, capsule: MissionCapsule, team: string, onProgress?: (p: PackProgress) => void) {
+    if (this.prepared.has(id)) return;
+    this.prepared.add(id);
+    void this.prepare(capsule, team, true, onProgress).then((p) => {
+      if (p.failed > 0) this.prepared.delete(id);
+    });
   }
 
   private async playAll(clips: { blob: Blob; source: ClipSource }[], caption: string): Promise<SpeakResult> {

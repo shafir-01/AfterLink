@@ -105,7 +105,7 @@ test('a view that fails to load offers a reload instead of a blank page', async 
   await expect(page.getByRole('button', { name: 'Reload' })).toBeVisible();
 });
 
-test('after one visit the site loads and runs with no network', async ({ page, context }) => {
+async function visitOnce(page: Page) {
   await page.goto(ROOT);
   await ready(page);
   await page.evaluate(async () => {
@@ -113,24 +113,41 @@ test('after one visit the site loads and runs with no network', async ({ page, c
     if (navigator.serviceWorker.controller) return;
     await new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
   });
+  expect(await page.evaluate(async () => (await navigator.serviceWorker.ready).scope)).toBe(ROOT);
+}
 
-  const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
-  expect(scope).toBe(ROOT);
-
+test('after one visit, the browser offline: the app, all four devices and every route still load', async ({ page, context }) => {
+  await visitOnce(page);
   await context.setOffline(true);
   const seen = watch(page);
   await page.reload();
-  await ready(page);
-  expect(page.frames().filter((f) => f.url().startsWith(`${ROOT}?device=`))).toHaveLength(4);
 
-  await page.getByRole('button', { name: 'Break the network', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Split the teams', exact: true })).toBeEnabled({ timeout: 30_000 });
+  const devices = () => page.frames().filter((f) => f.url().startsWith(`${ROOT}?device=`));
+  await expect.poll(() => devices().length, { timeout: 20_000 }).toBe(4);
+  for (const frame of devices()) await expect(frame.locator('main, .field').first()).toBeVisible({ timeout: 20_000 });
 
   for (const route of ['verify', 'compose', 'debrief', 'lead']) {
     await page.goto(`${ROOT}#/${route}`);
-    await expect(page.locator('h1').first()).toBeVisible({ timeout: 15_000 });
+    await page.reload();
+    await expect(page.locator('main').first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('unavailable')).toHaveCount(0);
   }
   expect(seen.problems).toEqual([]);
   await context.setOffline(false);
+});
+
+test('after one visit, the host gone but the Wi-Fi up: the mission runs peer to peer', async ({ page, request }) => {
+  await visitOnce(page);
+  await request.get(`${new URL(ROOT).origin}/outage?down=1`);
+  const seen = watch(page);
+  try {
+    await page.reload();
+    await ready(page);
+    expect(page.frames().filter((f) => f.url().startsWith(`${ROOT}?device=`))).toHaveLength(4);
+    await page.getByRole('button', { name: 'Break the network', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Split the teams', exact: true })).toBeEnabled({ timeout: 30_000 });
+    expect(seen.problems).toEqual([]);
+  } finally {
+    await request.get(`${new URL(ROOT).origin}/outage?down=0`);
+  }
 });

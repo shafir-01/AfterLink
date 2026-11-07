@@ -204,7 +204,7 @@ export class MissionController implements StageController {
       });
       return seat;
     });
-    this.host.ready(cast.order.map((team) => bundles[team]!));
+    this.host.ready(cast.order.map((team) => bundles[team]!), issuer);
     this.emit();
     void this.whenLive(run);
   }

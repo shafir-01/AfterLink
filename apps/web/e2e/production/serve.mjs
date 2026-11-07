@@ -1,6 +1,7 @@
 /**
  * Builds the site the way the Pages workflow does and serves it the way GitHub Pages does: only under
  * /AfterLink/, static files only, 404.html with a 404 status for anything else, POST refused.
+ * GET /outage?down=1 makes the host stop answering, as a venue's Wi-Fi does when its uplink goes.
  * A second port stands in for a relay that is asleep: it accepts connections and never answers.
  */
 import { spawnSync } from 'node:child_process';
@@ -44,8 +45,15 @@ async function file(path) {
   }
 }
 
+let down = false;
+
 createServer(async (req, res) => {
-  const { pathname } = new URL(req.url, 'http://pages');
+  const { pathname, searchParams } = new URL(req.url, 'http://pages');
+  if (pathname === '/outage') {
+    down = searchParams.get('down') === '1';
+    return res.end();
+  }
+  if (down) return req.socket.destroy();
   if (req.method !== 'GET' && req.method !== 'HEAD') return res.writeHead(405).end();
   const found = pathname.startsWith(base) ? await file(pathname.slice(base.length)) : null;
   const page = found ?? (await file('404.html'));

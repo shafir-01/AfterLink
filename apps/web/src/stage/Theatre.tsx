@@ -20,6 +20,8 @@ interface TheatreProps {
   bind: (id: ActorId, el: HTMLIFrameElement | null) => void;
   overlay?: (id: ActorId) => ReactNode;
   marks: Record<ActorId, { tone: string } | undefined>;
+  /** Replaces the iframe when the device is a real phone elsewhere. */
+  card?: (id: ActorId) => ReactNode;
   children?: ReactNode;
 }
 
@@ -52,7 +54,7 @@ const DeviceFrame = memo(function DeviceFrame({
   );
 });
 
-export function Theatre({ devices, pairs, groups, scene, bind, overlay, marks, children }: TheatreProps) {
+export function Theatre({ devices, pairs, groups, scene, bind, overlay, marks, card, children }: TheatreProps) {
   const host = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const order = useMemo(() => devices.map((d) => d.id), [devices]);
@@ -121,15 +123,7 @@ export function Theatre({ devices, pairs, groups, scene, bind, overlay, marks, c
               style={{ width: frame.slots[0]!.w, height: frame.slots[0]!.h, '--st-scale': frame.scale } as CSSProperties}
             >
               <div className="st-screen">
-                <DeviceFrame
-                  id={d.id}
-                  name={d.name}
-                  src={d.src}
-                  width={DEVICE_W}
-                  height={frame.deviceH}
-                  scale={frame.scale}
-                  bind={bind}
-                />
+                {card ? card(d.id) : <DeviceFrame id={d.id} name={d.name} src={d.src} width={DEVICE_W} height={frame.deviceH} scale={frame.scale} bind={bind} />}
               </div>
               {overlay?.(d.id)}
             </div>

@@ -24,7 +24,7 @@ export interface MissionHost {
   room(run: number): string;
   begin(onHq: () => void, onFail: (message: string) => void): void;
   device(run: number, index: number, bundle: ProvisionBundle, pace: number): { link: DeviceLink; src: string };
-  ready(bundles: ProvisionBundle[]): void;
+  ready(bundles: ProvisionBundle[], issuer: { publicKey: ActorId; secretKey: string }): void;
   hq(): HostHq;
   killHq(): void;
   restoreHq(): void;

@@ -79,15 +79,9 @@ export function useVoiceBrief(task: TaskSpec | TaskRecord | null, online: boolea
 
 export function useVoicePack(capsule: MissionCapsule | null, team: string, online: boolean, pack: VoicePack = getVoicePack()) {
   const [progress, setProgress] = useState<PackProgress | null>(null);
-  const ran = useRef('');
   useEffect(() => {
     if (!capsule || !online || insideStage()) return;
-    const id = `${capsule.id}:${capsule.version}:${team}`;
-    if (ran.current === id) return;
-    ran.current = id;
-    pack.prepare(capsule, team, true, setProgress).then((p) => {
-      if (p.failed > 0) ran.current = '';
-    });
+    pack.prepareOnce(`${capsule.id}:${capsule.version}:${team}`, capsule, team, setProgress);
   }, [capsule, team, online, pack]);
   return progress;
 }
