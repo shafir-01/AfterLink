@@ -1,48 +1,35 @@
 .field {
-  --f-bg: #f6f6f3;
-  --f-surface: #ffffff;
-  --f-ink: #14171a;
-  --f-muted: #5a6168;
-  --f-line: #dcdcd6;
-  --f-accent: #0b5fd8;
-  --f-accent-ink: #ffffff;
-  --f-ok: #17703a;
-  --f-warn: #9a5b00;
-  --f-off: #b3261e;
-  --f-warn-bg: #fff3dc;
-  --f-scrim: rgba(10, 12, 14, 0.45);
-  --f-radius: 20px;
+  --f-bg: var(--bg);
+  --f-surface: var(--bg-subtle);
+  --f-ink: var(--fg);
+  --f-muted: var(--fg-muted);
+  --f-line: var(--line);
+  --f-accent: var(--accent);
+  --f-accent-ink: var(--accent-fg);
+  --f-ok: var(--ok);
+  --f-warn: var(--warn);
+  --f-off: var(--stop);
+  --f-warn-bg: color-mix(in srgb, var(--warn) 14%, var(--bg));
+  --f-scrim: var(--scrim);
 
   box-sizing: border-box;
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-3);
   width: 100%;
   min-height: 100dvh;
   padding: max(18px, env(safe-area-inset-top)) 18px max(16px, env(safe-area-inset-bottom));
   background: var(--f-bg);
   color: var(--f-ink);
-  font: 400 16px/1.4 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font: 400 var(--text-body)/1.4 var(--font-sans);
   container-type: inline-size;
   -webkit-text-size-adjust: 100%;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .field {
-    --f-bg: #0e1113; --f-surface: #181c1f; --f-ink: #f1f2f0; --f-muted: #a3aaaf; --f-line: #2b3136;
-    --f-accent: #6aa5ff; --f-accent-ink: #06142b; --f-ok: #5fd08a; --f-warn: #f0b24a; --f-off: #ff8a80;
-    --f-warn-bg: #2a2110; --f-scrim: rgba(0, 0, 0, 0.6);
-  }
-}
-:root[data-theme='dark'] .field {
-  --f-bg: #0e1113; --f-surface: #181c1f; --f-ink: #f1f2f0; --f-muted: #a3aaaf; --f-line: #2b3136;
-  --f-accent: #6aa5ff; --f-accent-ink: #06142b; --f-ok: #5fd08a; --f-warn: #f0b24a; --f-off: #ff8a80;
-  --f-warn-bg: #2a2110; --f-scrim: rgba(0, 0, 0, 0.6);
 }
 .field *, .field *::before, .field *::after { box-sizing: border-box; }
 .field :where(h1, h2, p, ul, dl, dd) { margin: 0; padding: 0; }
 .field :where(button) { font: inherit; color: inherit; cursor: pointer; }
-.field :focus-visible { outline: 3px solid var(--f-accent); outline-offset: 2px; }
+.field :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 
 .f-live { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
@@ -136,3 +123,10 @@
   .f-scrim, .f-sheet { animation: none; }
   .f-btn:active:not(:disabled) { transform: none; }
 }
+
+.field .vo-bar { padding-top: var(--space-3); border-top: 1px solid var(--f-line); gap: var(--space-2); }
+.field .vo-bar [role='group'] { display: none; }
+.field.compact .vo-bar button { font-size: 13px; padding: 0 10px; }
+.f-sub { font-size: 15px; color: var(--f-muted); }
+.f-paths { margin-top: var(--space-2); }
+.field .vo-caption { color: var(--f-muted); }

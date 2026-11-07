@@ -33,8 +33,8 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
             (el) => !el.hasAttribute('disabled'),
           );
           if (!els.length) return;
-          const first = els[0];
-          const last = els[els.length - 1];
+          const first = els[0]!;
+          const last = els[els.length - 1]!;
           if (e.shiftKey && document.activeElement === ref.current) { e.preventDefault(); last.focus(); }
           else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
           else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }

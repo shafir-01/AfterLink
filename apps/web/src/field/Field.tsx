@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ActorNode, ActorView } from '@afterlink/actor';
+import type { ProvisionBundle } from '@afterlink/protocol';
 import './field.css';
+import { VoiceBar } from '../voice';
+import { loadStoredBundle } from '../device/provisionLink';
+import { ReconnectSheet } from './reconnect';
 import { CarrySheet, ReportSheet, ScanSheet, TransfersSheet, WhySheet } from './sheets';
 import { announce, clock, connection, focus, lastHeard, nextStep, rights } from './derive';
 
-type SheetName = 'why' | 'carry' | 'scan' | 'report' | 'transfers' | null;
+type SheetName = 'why' | 'carry' | 'scan' | 'report' | 'transfers' | 'reconnect' | null;
 
 function useView(node: ActorNode): ActorView {
   const cache = useRef<ActorView>(node.view());
@@ -25,7 +29,8 @@ const PinIcon = () => (
   </svg>
 );
 
-export function Field({ actor, compact = false }: { actor: ActorNode; compact?: boolean }) {
+export function Field({ actor, compact = false, bundle }: { actor: ActorNode; compact?: boolean; bundle?: ProvisionBundle }) {
+  const keys = useMemo(() => bundle ?? loadStoredBundle()?.bundle ?? null, [bundle]);
   const view = useView(actor);
   const [sheet, setSheet] = useState<SheetName>(null);
   const [busy, setBusy] = useState(false);
@@ -53,7 +58,7 @@ export function Field({ actor, compact = false }: { actor: ActorNode; compact?: 
   const decline = () => task && actor.declineTask(task.spec.id, 'Declined by volunteer');
   const ask = (resource: string) => {
     if (!task) return;
-    actor.observe(`need.${resource}`, task.spec.id);
+    actor.requestTransfer(resource, task.spec.id);
   };
 
   const status = task?.status;
@@ -79,7 +84,6 @@ export function Field({ actor, compact = false }: { actor: ActorNode; compact?: 
             {(refusal || status === 'accepted') && <p className="f-eyebrow">{refusal ? 'Not started' : 'In progress'}</p>}
             <h2 className="f-title">{task.spec.title}</h2>
             <p className="f-where"><PinIcon /> {task.spec.locationName}</p>
-            {!refusal && <p className="f-brief">{task.spec.brief}</p>}
             {refusal && (
               <div className="f-refusal" role="group" aria-label="Why this cannot start">
                 <p>{refusal.reason}</p>
@@ -104,6 +108,8 @@ export function Field({ actor, compact = false }: { actor: ActorNode; compact?: 
         </ul>
       )}
 
+      {task && <VoiceBar key={task.spec.id} task={task} actor={actor} />}
+
       <div className="f-actions">
         {primary && (
           <button className="f-btn f-btn-primary f-big" onClick={primary === 'Done' ? done : accept} disabled={busy}>
@@ -125,6 +131,7 @@ export function Field({ actor, compact = false }: { actor: ActorNode; compact?: 
         <button onClick={() => setSheet('why')} disabled={!task && !view.lastDecision}>Why this?</button>
         <button onClick={() => setSheet('carry')}>Carry update</button>
         <button onClick={() => setSheet('scan')}>Scan update</button>
+        {keys && <button onClick={() => setSheet('reconnect')}>Reconnect by QR</button>}
         <button onClick={() => setSheet('report')}>Report a problem</button>
         <button onClick={() => setSheet('transfers')} className={transfers ? 'alert' : ''}>
           Transfers{transfers ? <span className="f-badge" aria-label={`${transfers} waiting`}>{transfers}</span> : null}
@@ -134,6 +141,7 @@ export function Field({ actor, compact = false }: { actor: ActorNode; compact?: 
       {sheet === 'why' && <WhySheet view={view} onClose={() => setSheet(null)} />}
       {sheet === 'carry' && <CarrySheet node={actor} onClose={() => setSheet(null)} />}
       {sheet === 'scan' && <ScanSheet node={actor} onClose={() => setSheet(null)} />}
+      {sheet === 'reconnect' && keys && <ReconnectSheet node={actor} bundle={keys} onClose={() => setSheet(null)} />}
       {sheet === 'report' && <ReportSheet node={actor} onClose={() => setSheet(null)} />}
       {sheet === 'transfers' && <TransfersSheet node={actor} view={view} onClose={() => setSheet(null)} />}
     </div>
