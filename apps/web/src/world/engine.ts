@@ -257,7 +257,7 @@ export class Engine {
   }
 
   private teamInk(id: ActorId): string {
-    const d = this.state?.devices.find((x) => x.id === id);
+    const d = this.state?.seats.find((x) => x.id === id);
     return d ? resolve(this.root, teamColor(d.team)) : this.ink.muted;
   }
 
@@ -294,13 +294,13 @@ export class Engine {
     this.state = state;
     this.rest = restPoints(state);
 
-    for (const d of state.devices) {
+    for (const d of state.seats) {
       if (!this.figures.has(d.id)) this.figures.set(d.id, this.spawn(d));
       if (!this.beams.has(d.id)) this.beams.set(d.id, { id: d.id, reach: 0 });
       this.aim(this.figures.get(d.id)!, d);
     }
 
-    for (const l of state.links) {
+    for (const l of state.pairs) {
       const key = pairKey(l.a, l.b);
       const t = this.threads.get(key);
       if (t) {
@@ -385,15 +385,15 @@ export class Engine {
 
   private syncCourier(carry: StageCarry | null) {
     if (!carry || carry.phase === 'done' || carry.phase === 'failed') {
-      if (carry?.phase === 'failed' && this.courier) this.carried = { to: carry.to, text: 'Did not verify', until: performance.now() + 4000 };
+      if (carry?.phase === 'failed' && this.courier) this.carried = { to: carry.receiver, text: 'Did not verify', until: performance.now() + 4000 };
       this.courier = null;
       return;
     }
-    const from = this.figures.get(carry.from);
-    const to = this.figures.get(carry.to);
+    const from = this.figures.get(carry.sender);
+    const to = this.figures.get(carry.receiver);
     if (!from || !to) return;
-    if (!this.courier || this.courier.from !== carry.from) {
-      this.courier = { from: carry.from, to: carry.to, pos: { x: from.pos.x + 2.4, y: from.pos.y + 1 }, route: [], leg: 0, speed: 0, step: 0, facing: 1, arrived: false };
+    if (!this.courier || this.courier.from !== carry.sender) {
+      this.courier = { from: carry.sender, to: carry.receiver, pos: { x: from.pos.x + 2.4, y: from.pos.y + 1 }, route: [], leg: 0, speed: 0, step: 0, facing: 1, arrived: false };
       this.qrReady = false;
     }
     const c = this.courier;
@@ -667,7 +667,7 @@ export class Engine {
     for (const t of this.threads.values()) this.shape(t, now, dt);
 
     for (const b of this.beams.values()) {
-      const d = this.state?.devices.find((x) => x.id === b.id);
+      const d = this.state?.seats.find((x) => x.id === b.id);
       const want = d?.signalUp ? 1 : 0;
       b.reach = this.reduced ? want : stepAlong(b.reach, want, want ? 2.6 : 5, dt);
     }

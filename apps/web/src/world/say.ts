@@ -4,7 +4,7 @@ import { plainReason } from './knowledge';
 
 /** One plain sentence for each moment, for people who cannot see the map. */
 export function sentence(e: StageEvent, state: StageState): string | null {
-  const name = (id: ActorId) => state.devices.find((d) => d.id === id)?.name ?? 'A team';
+  const name = (id: ActorId) => state.seats.find((d) => d.id === id)?.name ?? 'A team';
   const task = (id: string) => state.truth.tasks.find((t) => t.id === id)?.title ?? 'a task';
   switch (e.kind) {
     case 'link':
@@ -33,6 +33,6 @@ export function sentence(e: StageEvent, state: StageState): string | null {
 /** Says what the split looks like whenever the groups change. */
 export function groupsSentence(state: StageState): string {
   if (state.groups.length < 2) return 'All teams can reach each other.';
-  const names = state.groups.map((g) => g.map((id) => state.devices.find((d) => d.id === id)?.name ?? '').join(' and '));
+  const names = state.groups.map((g) => g.map((id) => state.seats.find((d) => d.id === id)?.name ?? '').join(' and '));
   return `${state.groups.length} groups: ${names.join('; ')}.`;
 }
