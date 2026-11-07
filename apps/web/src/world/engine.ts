@@ -986,7 +986,7 @@ export class Engine {
         c.lineWidth = 1;
         c.globalAlpha = p.known * (1 - t) * 0.5;
         c.beginPath();
-        c.ellipse(at.x, at.y, (5 + 15 * t) * s, (1.8 + 5.4 * t) * s, 0, 0, Math.PI * 2);
+        c.ellipse(at.x, at.y, Math.max(0, (5 + 15 * t) * s), Math.max(0, (1.8 + 5.4 * t) * s), 0, 0, Math.PI * 2);
         c.stroke();
         c.globalAlpha = p.known;
       }
@@ -1181,7 +1181,7 @@ export class Engine {
       c.lineWidth = 1;
       c.globalAlpha = 1 - t;
       c.beginPath();
-      c.ellipse(at.x, at.y, 34 * ease(t) * f.u, 12 * ease(t) * f.u, 0, 0, Math.PI * 2);
+      c.ellipse(at.x, at.y, Math.max(0, 34 * ease(t) * f.u), Math.max(0, 12 * ease(t) * f.u), 0, 0, Math.PI * 2);
       c.stroke();
       c.globalAlpha = 1;
       return true;

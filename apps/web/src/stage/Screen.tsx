@@ -2,7 +2,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useSyncExternalStore
 import type { ActorId } from '@afterlink/protocol';
 import { Radio, useSoundEvents } from '../sound';
 import { ViewBoundary } from '../ui/guarded';
-import type { WorldController } from '../world/contract';
+import type { StageController as WorldController } from './contract';
 import type { StageDevice, StageMark } from './contract';
 import type { MissionController } from './controller';
 import { Courier } from './Courier';

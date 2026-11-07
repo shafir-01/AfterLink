@@ -623,3 +623,15 @@
   height: 100%;
   border: 0;
 }
+
+.w-devices iframe.w-phone-open {
+  position: fixed;
+  inset: auto 24px 110px auto;
+  width: 300px;
+  height: min(560px, calc(100vh - 240px));
+  pointer-events: auto;
+  border-radius: 28px;
+  background: var(--bg, #fff);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  z-index: 40;
+}

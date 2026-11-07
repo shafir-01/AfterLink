@@ -477,9 +477,9 @@ export function World({ controller }: { controller: StageController }) {
 
       {frame?.compact && <List state={state} lens={lens} onTeam={tapTeam} onLink={toggleLink} onTower={tapTower} onCarry={(a, b) => controller.carry(a, b)} routes={stands} names={names} />}
 
-      <div className="w-devices" aria-hidden="true">
+      <div className="w-devices" aria-hidden={!locked}>
         {state.seats.map((d) => (
-          <iframe key={d.id} ref={(el) => controller.attach(d.id, el)} title={`${d.name} device`} src={d.src} allow="microphone; camera; autoplay" tabIndex={-1} />
+          <iframe key={d.id} className={locked === d.id ? "w-phone-open" : undefined} ref={(el) => controller.attach(d.id, el)} title={`${d.name} device`} src={d.src} allow="microphone; camera; autoplay" tabIndex={-1} />
         ))}
       </div>
 
