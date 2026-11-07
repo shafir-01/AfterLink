@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: afterlink
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -w @afterlink/relay
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: AFTERLINK_WEB_DIST
+        value: apps/web/dist
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: N8N_BASE_URL
+        sync: false
+      - key: N8N_API_KEY
+        sync: false
+      - key: AFTERLINK_ADMIN_TOKEN
+        generateValue: true
