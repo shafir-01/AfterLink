@@ -1,0 +1,332 @@
+{
+  "name": "AfterLink Debrief",
+  "nodes": [
+    {
+      "id": "debrief-webhook",
+      "name": "Debrief webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "afterlink-debrief",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "afterlink/debrief",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Edit these two values after pasting.\nconst relayUrl = 'https://YOUR-RELAY-URL';\nconst secret = 'YOUR-SHARED-SECRET';\nreturn $input.all().map((i) => ({ json: { ...i.json, config: { relayUrl: relayUrl.replace(/[/]+$/, ''), secret } } }));"
+      }
+    },
+    {
+      "name": "Write after-action report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const raw = $input.first().json;\nconst secret = $('Config').first().json.config.secret;\nconst given = (raw.headers && (raw.headers['x-afterlink-ingress-secret'] || raw.headers['x-afterlink-ingress-secret'.toLowerCase()])) || '';\nif (given !== secret) return [{ json: { authorized: false } }];\nconst p = raw.body && typeof raw.body === 'object' ? raw.body : {};\nconst r = p.record && typeof p.record === 'object' ? p.record : null;\nif (!r || typeof r.mission !== 'string') return [{ json: { authorized: true, valid: false } }];\nconst esc = (v) => String(v ?? '').replace(/[&<>\"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[ch]);\nconst num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);\nconst arr = (v) => (Array.isArray(v) ? v : []);\nconst conflicts = arr(r.conflicts), episodes = arr(r.episodes), cons = arr(r.conservation), timeline = arr(r.timeline), unknowns = arr(r.unknowns);\nconst violations = conflicts.filter((c) => c.severity === 'violation').length;\nconst when = (ms) => (ms ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : 'open');\nconst generatedAt = new Date().toISOString();\nconst md = [\n  '# After-action report: ' + r.mission, '',\n  'Generated ' + generatedAt, '',\n  p.narrative ? String(p.narrative) + '\\n' : '',\n  '## Summary', '',\n  '- Events reconciled: ' + num(r.events),\n  '- Actors: ' + num(r.actors),\n  '- Tasks completed while HQ was blind: ' + num(r.doneWhileHqBlind),\n  '- Unsafe commitments refused: ' + num(r.refusedUnsafe),\n  '- Duplicate efforts prevented: ' + num(r.duplicatesPrevented),\n  '- Conflicts: ' + conflicts.length + ' (' + violations + ' invariant violations)', '',\n  '## Partitions', '',\n  ...(episodes.length ? episodes.map((e) => '- ' + when(e.from) + ' to ' + when(e.to) + ': ' + num(e.tasksDone) + ' tasks done, ' + num(e.decisions) + ' decisions, ' + num(e.refusals) + ' refusals') : ['- None recorded']), '',\n  '## Resource conservation', '',\n  ...(cons.length ? cons.map((c) => '- ' + c.resource + ': issued ' + num(c.issued) + ', committed ' + num(c.committed) + ', held ' + num(c.held) + ', in transit ' + num(c.inTransit) + ' (' + (c.ok ? 'balanced' : 'NOT balanced') + ')') : ['- None recorded']), '',\n  '## Conflicts', '',\n  ...(conflicts.length ? conflicts.map((c) => '- [' + c.severity + '] ' + c.kind + ': ' + c.summary + (c.resolved ? ' Resolved: ' + (c.resolution || 'yes') : ' Unresolved')) : ['- None']), '',\n  '## Unknowns', '',\n  ...(unknowns.length ? unknowns.map((u) => '- ' + u) : ['- None']), '',\n  '## Timeline (' + timeline.length + ' entries)', '',\n  ...timeline.slice(0, 200).map((t) => '- ' + when(t.at) + ' [' + t.team + '] ' + t.label + (t.hiddenFromHq ? ' (HQ did not see this)' : '')),\n].join('\\n');\nconst li = (items) => '<ul>' + items.map((i) => '<li>' + esc(i) + '</li>').join('') + '</ul>';\nconst html = '<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>After-action report</title><style>body{font:16px/1.55 system-ui,sans-serif;max-width:48rem;margin:2rem auto;padding:0 1rem;color:#111;background:#fff}h1{font-size:1.5rem}h2{margin-top:2rem;font-size:1.1rem}li{margin:.2rem 0}.meta{color:#555}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}.meta{color:#aaa}}</style></head><body>'\n  + '<h1>After-action report: ' + esc(r.mission) + '</h1><p class=\"meta\">Generated ' + esc(generatedAt) + '</p>'\n  + (p.narrative ? '<p>' + esc(p.narrative) + '</p>' : '')\n  + '<h2>Summary</h2>' + li(['Events reconciled: ' + num(r.events), 'Actors: ' + num(r.actors), 'Tasks completed while HQ was blind: ' + num(r.doneWhileHqBlind), 'Unsafe commitments refused: ' + num(r.refusedUnsafe), 'Duplicate efforts prevented: ' + num(r.duplicatesPrevented), 'Conflicts: ' + conflicts.length + ' (' + violations + ' invariant violations)'])\n  + '<h2>Partitions</h2>' + li(episodes.length ? episodes.map((e) => when(e.from) + ' to ' + when(e.to) + ': ' + num(e.tasksDone) + ' tasks done, ' + num(e.decisions) + ' decisions, ' + num(e.refusals) + ' refusals') : ['None recorded'])\n  + '<h2>Resource conservation</h2>' + li(cons.length ? cons.map((c) => c.resource + ': issued ' + num(c.issued) + ', committed ' + num(c.committed) + ', held ' + num(c.held) + ', in transit ' + num(c.inTransit) + ' (' + (c.ok ? 'balanced' : 'not balanced') + ')') : ['None recorded'])\n  + '<h2>Conflicts</h2>' + li(conflicts.length ? conflicts.map((c) => '[' + c.severity + '] ' + c.kind + ': ' + c.summary + (c.resolved ? ' Resolved.' : ' Unresolved.')) : ['None'])\n  + '<h2>Unknowns</h2>' + li(unknowns.length ? unknowns : ['None'])\n  + '<h2>Timeline</h2>' + li(timeline.slice(0, 200).map((t) => when(t.at) + ' [' + t.team + '] ' + t.label + (t.hiddenFromHq ? ' (HQ did not see this)' : '')))\n  + '</body></html>';\nconst store = $getWorkflowStaticData('global');\nconst entry = { mission: r.mission, generatedAt, markdown: md, html };\nstore.latest = entry;\nstore.history = [{ mission: r.mission, generatedAt, conflicts: conflicts.length }, ...(store.history || [])].slice(0, 20);\nreturn [{ json: { authorized: true, valid: true, mission: r.mission, generatedAt, subject: 'After-action report: ' + r.mission, markdown: md, html, published: true, reportUrl: 'https://' + (raw.headers.host || '') + '/webhook/afterlink/report' } }];"
+      }
+    },
+    {
+      "name": "Authorized?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "a",
+              "leftValue": "={{ $json.authorized }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Reject unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ published: false, error: \"unauthorized\" }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      }
+    },
+    {
+      "name": "Valid record?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Reject invalid record",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ published: false, error: \"a mission record is required\" }) }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    },
+    {
+      "name": "Send by email (disabled)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        -240
+      ],
+      "disabled": true,
+      "parameters": {
+        "fromEmail": "afterlink@example.invalid",
+        "toEmail": "team@example.invalid",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      }
+    },
+    {
+      "name": "Respond published",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ published: true, mission: $json.mission, generatedAt: $json.generatedAt, reportUrl: $json.reportUrl }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "latest-report-page",
+      "name": "Latest report page",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        400
+      ],
+      "webhookId": "afterlink-report",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "afterlink/report",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Load latest report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const store = $getWorkflowStaticData('global');\nconst l = store.latest;\nconst html = l ? l.html : '<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>After-action report</title></head><body style=\"font:16px system-ui;max-width:40rem;margin:2rem auto;padding:0 1rem\"><h1>After-action report</h1><p>No report has been published yet.</p></body></html>';\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "name": "Serve latest report",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        400
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Debrief webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Write after-action report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write after-action report": {
+      "main": [
+        [
+          {
+            "node": "Authorized?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorized?": {
+      "main": [
+        [
+          {
+            "node": "Valid record?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid record?": {
+      "main": [
+        [
+          {
+            "node": "Respond published",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send by email (disabled)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject invalid record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Latest report page": {
+      "main": [
+        [
+          {
+            "node": "Load latest report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load latest report": {
+      "main": [
+        [
+          {
+            "node": "Serve latest report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
