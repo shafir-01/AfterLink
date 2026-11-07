@@ -1,0 +1,23 @@
+{
+  "name": "@afterlink/actor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@afterlink/authority": "*",
+    "@afterlink/ferry": "*",
+    "@afterlink/mesh": "*",
+    "@afterlink/mission": "*",
+    "@afterlink/planner": "*",
+    "@afterlink/protocol": "*",
+    "@afterlink/reconcile": "*",
+    "idb": "^8.0.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.7"
+  }
+}
