@@ -36,6 +36,8 @@ Rules:
 interface Ctx { objectives: { id: string; title: string }[]; resources: string[]; capabilities: string[] }
 interface Body { text: string; context: Ctx }
 
+const DEFAULT_CAPABILITIES = ['first-aid', 'mobility', 'repair', 'haul'];
+
 const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter(str).slice(0, 50) : []);
 
 function parseBody(raw: unknown): Body | string {
@@ -44,7 +46,8 @@ function parseBody(raw: unknown): Body | string {
   if (r.text.length > 4000) return 'text is too long';
   const c = r.context ?? {};
   const objectives = Array.isArray(c.objectives) ? c.objectives.flatMap((o) => (str(o?.id) && str(o?.title) ? [{ id: o.id, title: o.title }] : [])).slice(0, 20) : [];
-  return { text: r.text, context: { objectives, resources: strList(c.resources), capabilities: strList(c.capabilities) } };
+  const capabilities = strList(c.capabilities);
+  return { text: r.text, context: { objectives, resources: strList(c.resources), capabilities: capabilities.length ? capabilities : DEFAULT_CAPABILITIES } };
 }
 
 export type TaskDraft = Omit<TaskSpec, 'location' | 'locationName' | 'objective'> & {
@@ -73,6 +76,7 @@ export function registerTriage(app: Hono, ctx: AiContext): void {
     if (d.objective && !objective) unknowns.push({ field: 'objective', note: 'The objective is not defined for this mission' });
     const { source, unknowns: _ignored, ...rest } = d;
     const spec = { ...rest, id: `triage-${randomUUID().slice(0, 8)}`, requires, needs, objective, dependsOn: [] } as unknown as TaskDraft;
-    return { body: { spec, source, unknowns, meta: out.meta } };
+    const { kind, priority, reversible } = spec;
+    return { body: { kind, priority, requires, needs, reversible, spec, source, unknowns, meta: out.meta } };
   }, parseBody);
 }

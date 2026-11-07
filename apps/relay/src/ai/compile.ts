@@ -72,11 +72,12 @@ function parseBody(raw: unknown): CompileBody | string {
   const r = raw as { objective?: unknown; clarifications?: unknown; issuer?: unknown } | undefined;
   if (!r || !str(r.objective)) return 'objective is required';
   if (r.objective.length > 6000) return 'objective is too long';
+  if (!str(r.issuer)) return 'issuer (the organiser public key) is required';
   const clar = Array.isArray(r.clarifications) ? r.clarifications : [];
   const clarifications = clar.flatMap((c: { question?: unknown; answer?: unknown }) =>
     str(c?.question) && str(c?.answer) ? [{ question: c.question.slice(0, 500), answer: c.answer.slice(0, 2000) }] : [],
   );
-  return { objective: r.objective, clarifications, issuer: str(r.issuer) ? r.issuer : 'unsigned-draft' };
+  return { objective: r.objective, clarifications, issuer: r.issuer };
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[\s"'`.,;:!?]+/g, ' ').trim();
