@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AnyEvent, DecisionRecord, EventBodies, EventType, MissionCapsule, MissionState, TaskSpec } from '@afterlink/protocol';
+// Fixtures are unsigned; signature checks are covered in packages/protocol.
+vi.mock('@afterlink/protocol', async (load) => ({ ...(await load<object>()), verifyEvent: () => ({ ok: true }) }));
+
 import { buildMissionRecord, classify, counterfactual, whoKnewWhat } from '../src/index.ts';
 
 const M = 'medics-dev', A = 'access-dev', S = 'supply-dev';
@@ -189,7 +192,7 @@ describe('buildMissionRecord', () => {
     const s = story();
     const st = state({ tokens: { 'chair#1': { id: 'chair#1', resource: 'chair', holder: S, holderTeam: 'supply', state: 'committed', chain: [] } } });
     const rec = buildMissionRecord({ events: s.all, state: st, hqSeen: [], episodes: [] });
-    expect(rec.conservation).toEqual([{ resource: 'chair', issued: 1, committed: 1, held: 0, inTransit: 0, ok: true }]);
+    expect(rec.conservation).toMatchObject([{ resource: 'chair', issued: 1, committed: 1, held: 0, inTransit: 0, ok: true }]);
   });
 });
 

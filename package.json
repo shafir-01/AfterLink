@@ -12,8 +12,9 @@
     "relay": "npm run dev -w @afterlink/relay",
     "build": "npm run build -w @afterlink/web",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
-    "lab": "tsx packages/lab/src/cli.ts"
+    "test": "vitest run packages apps",
+    "lab": "tsx packages/lab/src/cli.ts",
+    "test:adversarial": "vitest run tests"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",

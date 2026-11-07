@@ -10,6 +10,14 @@ It does not guarantee physical possession. A token says a team has the right to 
 
 It does not defend against a compromised device. A stolen or malicious device holds valid keys and can sign valid events until the organiser revokes it, and a device that is partitioned may not hear the revocation. Signatures prove who signed and not whether what they reported is true. Equivocation by a token holder is detected and surfaced after the fact, and this system does not prevent it in advance.
 
+## Forks
+
+A device that is restored from an old backup, or wiped and brought back with only stale peers reachable, has lost part of its own history. It can then sign a new event at a position it already used, and its log forks. AfterLink detects forks. Every peer compares chain heads, so two events at one position are surfaced as a violation in the debrief with both branches kept, and the organiser decides which stands.
+
+## What a verified mission file proves
+
+A file that verifies proves that every event in it is signed, chained, causally ordered and lawful, and that rights were conserved and committed once. It proves the events present, and it cannot prove that none were removed. The six word fingerprint names exactly the set of events in the file, so two people holding different subsets will see different words.
+
 ## Availability is spent to keep safety
 
 If a transfer acknowledgement is lost, the token stays in transit and nobody uses it. That is the price of never double spending without a coordinator. The remedy is contact, a QR carry, or a human decision, and the refusal tells the requester which of these applies.
@@ -34,7 +42,7 @@ The roster is fixed at provisioning for this scenario. Late joiners, key rotatio
 
 ## Intelligence and external services
 
-Claude, ElevenLabs and n8n are optional boundary services that need keys configured on the relay. Without keys the product reports them as unconfigured through `GET /api/status` and the corresponding features are off. Nothing is simulated in their place.
+n8n and Claude are optional boundaries, and so is ElevenLabs. They need keys or a webhook configured on the relay. Without them the product reports the service as unconfigured through `GET /api/status` and the matching feature is off, while the mission, the map, the debrief and the verifier run unchanged.
 
 Speech to text needs a connection and does not work offline. Briefings are playable offline only if they were synthesised and cached before the outage.
 
@@ -42,7 +50,7 @@ Model output is validated against the capsule schema and domain rules before it 
 
 ## Scale and scope
 
-The demonstrated scenario has four teams and three scarce resources. Event logs are not compacted, so long missions grow without bound in this version. The experiments in the lab test a small set of scenario families, and results should be read as covering those families only. See [EXPERIMENTS.md](EXPERIMENTS.md).
+The demonstrated scenario has four teams and three scarce resources. Event logs are not compacted, so long missions grow without bound in this version. The lab tests 17 scenario families on a simulated network, and results should be read as covering those families only. Its own Known defects table lists the runs where AfterLink raised a violation or did not converge. See [EXPERIMENTS.md](EXPERIMENTS.md) and `results/SUMMARY.md`.
 
 ## Privacy
 

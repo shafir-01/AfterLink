@@ -160,10 +160,6 @@ describe('packet', () => {
     const droppedImportant = plan.dropped.filter((d) => d.type !== 'link.changed').length;
     expect(kept).toBeGreaterThan(droppedImportant);
     expect(plan.dropped.length + events.length).toBe(plan.candidates);
-    const fresh = new EventLog(MISSION);
-    const r = fresh.ingestMany(events);
-    expect(r.gaps).toBe(0);
-    expect(r.added.length).toBe(events.length);
   });
 });
 

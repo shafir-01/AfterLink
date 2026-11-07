@@ -44,7 +44,7 @@ Raw output is written under `docs/results/`.
 
 ## Results
 
-Results are published only from files in `docs/results/` and from test output. This page quotes none of them directly, so it cannot drift from the data. Read the raw files for numbers, seeds and fault schedules.
+Results are published only from files in `docs/results/` and from test output. This page quotes none of them directly, so it cannot drift from the data. Read `results/SUMMARY.md` for the figures, including the table of metrics where AfterLink lost and the list of known defects, and `results/results.json` for seeds and fault schedules.
 
 ## What the numbers do not show
 

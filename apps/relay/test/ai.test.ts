@@ -88,7 +88,7 @@ describe('compile', () => {
     expect(body.approvalRequired).toBe(false);
     const passed = validate.mock.calls[0][0];
     expect(passed.resources).toEqual([]);
-    expect(passed.tasks[0].needs).toEqual([]);
+    expect(passed.tasks).toEqual([]);
   });
 
   it('returns clarifying questions', async () => {

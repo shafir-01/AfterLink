@@ -1,21 +1,81 @@
 # AfterLink
 
+<p align="center"><img src="docs/media/logo.png" alt="AfterLink logo" width="140"></p>
+
+![AfterLink, the network disappears and the mission does not](docs/media/og.png)
+
 **The network disappears. The mission does not.** AfterLink lets four volunteer teams keep working toward one shared mission after their central service dies and their devices are split into islands, then rebuilds exactly what happened when contact returns.
 
 ![License MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![TypeScript](https://img.shields.io/badge/language-TypeScript-3178c6.svg)
 ![Node 22+](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)
 
-## Demo
+## Live links
 
-The fastest way to see it is the solo stage, which needs no backend. Four real clients run on one page, each with its own key, storage and WebRTC connections, and a worker plays headquarters.
+| What | Where |
+|---|---|
+| Site | https://shafir-01.github.io/AfterLink/ |
+| Relay | https://afterlink.onrender.com |
+| Repository | https://github.com/shafir-01/AfterLink |
+| n8n intake form | https://software.app.n8n.cloud/webhook/afterlink/request |
+| Latest report from n8n | https://software.app.n8n.cloud/webhook/afterlink/report |
+
+## You are the outage
+
+The demo is a living festival map. Medics, Access, Facilities and Supply walk between their tasks, and glowing lines show the live peer links between them. A tower marks headquarters and says how many teams it can currently see. You then play the outage yourself.
+
+1. **Break the network.** Drag across a line to cut it, or click the HQ tower to kill headquarters. The tower changes to "HQ down" and shows the last time it confirmed anything, and the teams keep working.
+2. **Split the teams.** Cutting links leaves islands. Each island keeps accepting work, and a request dropped on the map, such as first aid, a blocked path or a wheelchair needed, is known only to the island that can hear it.
+3. **See through a team's eyes.** Tap a team and the map fogs to show only what that team's own device knows, read from its own log.
+4. **Request the contested resource.** Both islands ask for the last one. One commits and the other is refused, with the reason and what it can do next.
+5. **Carry the update.** Drag a courier to the other group. A signed update crosses as a sequence of real QR frames that the receiving device decodes, and carrying it twice changes nothing.
+6. **Restore contact.** Drag a cut line back together. With headquarters down a closed link can only reopen through signalling, so the map shows it as waiting for HQ until you restart the tower.
+7. **See what happened.** The debrief shows what each team did while headquarters was blind, what was refused and why, and what is still unknown.
+8. **Verify the file yourself.** Export the mission file and check it on the Verify page or on the command line. Signatures, hash chains and rights are replayed by a separate implementation, and the file is shown as valid or as exactly where it failed. Six words name the mission so two people can compare it aloud.
+
+The whole map works by keyboard and screen reader, and on a narrow screen it gives way to a plain list of teams, links, courier routes and the tower. **Use real phones** runs the same story on separate devices.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Select **Break the network** and the headquarters worker is terminated, yet the open peer channels keep assigning and completing work. A 90 second path through the whole story is in [docs/JUDGE_RUNBOOK.md](docs/JUDGE_RUNBOOK.md), and the evidence behind each claim is in [docs/EVIDENCE.md](docs/EVIDENCE.md).
+A 90 second path is in [docs/JUDGE_RUNBOOK.md](docs/JUDGE_RUNBOOK.md) and the evidence behind each claim is in [docs/EVIDENCE.md](docs/EVIDENCE.md).
+
+## Results
+
+Figures come from `docs/results/SUMMARY.md` and `docs/results/headline.json`, written by the fault lab from 10200 seeded runs over 17 fault families, 200 runs per family. Each scenario runs on three systems, a central dispatcher, an offline last-write-wins board and AfterLink, with the same incidents and faults.
+
+| Measure | Central | Board | AfterLink |
+|---|---|---|---|
+| Tasks done in the outage, hub dead and peers split | 2.7 | 16.1 | 15.5 |
+| Priority-1 tasks done in that outage | 0.8 | 4.8 | 4.4 |
+| Double-bookings per run, race for one chair | not in headline | 1.35 | 0.00 |
+| Unsafe starts on a false fact per run | not in headline | 1.02 | 0.00 |
+| Forged events accepted | not in headline | 397 | 0 |
+| Bytes to reconcile after the split | 15 kB | 63 kB | 835 kB |
+
+After the cut AfterLink made its first decision in 2.9 s, while the central dispatcher made none in 200 of 200 runs. AfterLink converged in 100.0% of runs after rejoining in the headline scenario.
+
+Some results are unfavourable and we say so plainly.
+
+- AfterLink does not out-work the offline board. Their intervals overlap on tasks done in the outage, so what separates them is safety and not throughput.
+- Safety costs work in some races. In the one-chair race AfterLink finished 4.3 priority-1 tasks in the outage against 5.3 for the board, because it refused what the board double-booked.
+- AfterLink is the most expensive system on the wire. Connected it sends 3688 kB per run against 487 kB for the board and 36 kB for central.
+- Excluding the attack family AfterLink had no double-bookings in 3200 runs. A compromised holder of a valid key can still sign a double spend, which AfterLink detects and does not prevent.
+- Every AfterLink run converged, and 9 runs raised a violation against an honest device. The lab lists each with a replay command under Known defects.
+
+The lab uses in-memory links in virtual time and a synthetic workload, so the numbers describe that world. Replay any run with `npx tsx packages/lab/src/cli.ts --replay <family>:<seed>:<system>`.
+
+## Resources used
+
+| Resource | Used |
+|---|---|
+| Claude API credit | RESOURCES_TBD |
+| ElevenLabs credits | RESOURCES_TBD |
+| n8n executions | RESOURCES_TBD |
+| Automated tests | RESOURCES_TBD |
+| Commits | RESOURCES_TBD |
 
 ## Why it matters
 
@@ -32,6 +92,7 @@ At a crowded university festival the medical, access, facilities and supply team
 - A QR ferry that carries signed, compressed deltas between groups with no electronic path, and ignores a repeated packet
 - Anti-entropy sync and reconciliation that separates clean merges, policy conflicts and violations
 - An observer that shows last confirmed time and a debrief of what was done while it was blind
+- An exportable mission file with an independent verifier, in the browser and on the command line
 - Optional Claude mission compilation and debrief narration, ElevenLabs spoken briefings, and n8n intake and reporting
 - A fault lab that runs the same code against a central dispatcher and an offline task board
 
@@ -133,9 +194,9 @@ flowchart LR
 
 Solid lines carry decisions. Dotted lines carry visibility, optional intelligence or a person with a phone. Remove every dotted line and the mesh still works. The full explanation is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## What it guarantees and what it does not
+## Guarantees and limits
 
-AfterLink guarantees digital rights. A token has one holder, a transfer cannot be refunded by the sender alone, events cannot be altered or applied twice, and conservation is checked. It does not prove that a volunteer physically holds a kit, and a compromised device keeps valid keys until it is revoked. These are stated limits and not oversights, and they are listed in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
+AfterLink guarantees digital rights. A token has one holder, a transfer cannot be refunded by the sender alone, events cannot be altered or applied twice, and conservation is checked. Possession of a physical kit stays a human observation, and a device restored from an old backup can fork its own history, which is detected and shown. These are covered in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## Testing
 
@@ -148,15 +209,15 @@ Tests cover signing and tamper detection, idempotent ingest, token conservation,
 
 ## Deployment
 
-The web app is a static PWA built with `npm run build` and can be served from any static host. The solo stage needs nothing else. Multi-device mode needs the relay reachable over WebSocket, and the relay also serves the built web app with a single page fallback, so one process can host everything on one origin. The repository includes a CI workflow, a Render blueprint for the relay and a Vercel configuration for the static site. Keep `.env` out of version control, set `AFTERLINK_ADMIN_TOKEN`, and use `AFTERLINK_DAILY_AI_CALLS` to cap paid calls.
+The web app is a static PWA built with `npm run build` and served at the site above. The map runs on one page with nothing else needed. Multi-device mode needs the relay reachable over WebSocket, and the relay also serves the built web app with a single page fallback, so one process can host everything on one origin. The repository includes a CI workflow and a Render blueprint for the relay. Keep `.env` out of version control, set `AFTERLINK_ADMIN_TOKEN`, and use `AFTERLINK_DAILY_AI_CALLS` to cap paid calls.
 
 ## External services
 
 Claude, ElevenLabs and n8n are optional. Each is used at runtime only through the relay, with keys held server side. None of them is in the decision path, and the product reports which are configured through `GET /api/status`.
 
-## Limitations and roadmap
+## Roadmap
 
-Membership is fixed at provisioning, logs are not compacted, and direct connections depend on the network allowing them. Next are revocation and late joiners, log snapshots, and a bundled TURN option. Details are in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
+Next are revocation and late joiners, log snapshots, and a bundled TURN option for networks that block direct connections. Details are in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## Contributing
 

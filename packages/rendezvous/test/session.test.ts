@@ -62,11 +62,9 @@ describe('reconnect by QR', () => {
     done.link.send({ t: 'ping', n: 7 });
     await expect.poll(() => got).toEqual([{ t: 'ping', n: 7 }]);
 
-    const states: string[] = [];
-    far.link.onState((s) => states.push(s));
-    await expect.poll(() => states).toEqual(['open']);
+    await expect.poll(() => far.link.state).toBe('open');
     done.link.close('closed');
-    await expect.poll(() => states).toEqual(['open', 'closed']);
+    await expect.poll(() => far.link.state).toBe('closed');
     expect(far.link.state).toBe('closed');
   });
 

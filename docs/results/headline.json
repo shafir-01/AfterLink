@@ -5,9 +5,9 @@
   "Double-bookings, one chair": "AfterLink 0.00, board 1.35",
   "Unsafe starts on a false fact": "AfterLink 0.00, board 1.02",
   "Converged after rejoining": "AfterLink 100.0%",
-  "Bytes to reconcile": "AfterLink 835 kB, board 63 kB, central 15 kB",
+  "Bytes to reconcile": "AfterLink 766 kB, board 89 kB, central 15 kB",
   "Forged events accepted": "AfterLink 0, board 397",
-  "generatedAt": "2026-11-07T15:50:35.184Z",
+  "generatedAt": "2026-11-07T16:20:01.763Z",
   "source": "docs/results/results.json",
   "runsPerFamily": 200,
   "familiesRun": 17,
@@ -85,10 +85,10 @@
           "noValue": 0
         },
         "afterlink": {
-          "mean": 4.445,
+          "mean": 4.45,
           "ci95": [
-            4.187416689966062,
-            4.702583310033939
+            4.191648714083569,
+            4.708351285916431
           ],
           "n": 200,
           "noValue": 0
@@ -196,10 +196,10 @@
           "noValue": 0
         },
         "afterlink": {
-          "mean": 2.015,
+          "mean": 2.01,
           "ci95": [
-            1.8599845583960155,
-            2.1700154416039847
+            1.857804413061951,
+            2.1621955869380485
           ],
           "n": 200,
           "noValue": 0
@@ -292,28 +292,28 @@
       "better": "lower",
       "values": {
         "central": {
-          "mean": 14737.085,
+          "mean": 15161.8,
           "ci95": [
-            14257.624374687735,
-            15216.545625312263
+            14643.039732517153,
+            15680.560267482846
           ],
           "n": 200,
           "noValue": 0
         },
         "board": {
-          "mean": 62999.17,
+          "mean": 89405.74,
           "ci95": [
-            58171.1633507598,
-            67827.1766492402
+            82164.88396667765,
+            96646.59603332236
           ],
           "n": 200,
           "noValue": 0
         },
         "afterlink": {
-          "mean": 835102.06,
+          "mean": 766096.56,
           "ci95": [
-            811453.7372737622,
-            858750.3827262379
+            746545.8431818287,
+            785647.2768181714
           ],
           "n": 200,
           "noValue": 0
@@ -348,10 +348,10 @@
           "noValue": 0
         },
         "afterlink": {
-          "mean": 2.45,
+          "mean": 2.375,
           "ci95": [
-            2.220537398630767,
-            2.6794626013692335
+            2.1473586639262385,
+            2.6026413360737615
           ],
           "n": 200,
           "noValue": 0
@@ -363,28 +363,28 @@
     {
       "family": "connected",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.70 MB [3.65 MB, 3.74 MB]",
+      "afterlink": "3.69 MB [3.64 MB, 3.73 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "35.8 kB [35.2 kB, 36.4 kB]"
+      "baselineValue": "37.0 kB [36.3 kB, 37.6 kB]"
     },
     {
       "family": "connected",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.70 MB [3.65 MB, 3.74 MB]",
+      "afterlink": "3.69 MB [3.64 MB, 3.73 MB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "486.9 kB [474.8 kB, 499.1 kB]"
     },
     {
       "family": "hub-death",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.66 MB [3.62 MB, 3.71 MB]",
+      "afterlink": "3.65 MB [3.61 MB, 3.70 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "25.8 kB [25.2 kB, 26.3 kB]"
+      "baselineValue": "26.3 kB [25.7 kB, 26.9 kB]"
     },
     {
       "family": "hub-death",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.66 MB [3.62 MB, 3.71 MB]",
+      "afterlink": "3.65 MB [3.61 MB, 3.70 MB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "488.5 kB [476.2 kB, 500.7 kB]"
     },
@@ -393,70 +393,84 @@
       "label": "Tasks finished by two teams",
       "afterlink": "0.83 [0.69, 0.97]",
       "baseline": "Central dispatcher",
-      "baselineValue": "0.57 [0.47, 0.68]"
+      "baselineValue": "0.56 [0.46, 0.66]"
+    },
+    {
+      "family": "two-groups",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.4 s [0.4 s, 0.5 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "two-groups",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "698.1 kB [672.6 kB, 723.6 kB]",
+      "afterlink": "627.1 kB [605.3 kB, 649.0 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "6.3 kB [5.9 kB, 6.7 kB]"
+      "baselineValue": "6.4 kB [6.0 kB, 6.8 kB]"
     },
     {
       "family": "two-groups",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "698.1 kB [672.6 kB, 723.6 kB]",
+      "afterlink": "627.1 kB [605.3 kB, 649.0 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "65.7 kB [61.0 kB, 70.4 kB]"
+      "baselineValue": "83.2 kB [78.3 kB, 88.1 kB]"
     },
     {
       "family": "two-groups",
       "label": "Bytes sent, whole run",
-      "afterlink": "2.93 MB [2.89 MB, 2.97 MB]",
+      "afterlink": "2.85 MB [2.81 MB, 2.89 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "31.6 kB [31.1 kB, 32.2 kB]"
+      "baselineValue": "32.7 kB [32.1 kB, 33.3 kB]"
     },
     {
       "family": "two-groups",
       "label": "Bytes sent, whole run",
-      "afterlink": "2.93 MB [2.89 MB, 2.97 MB]",
+      "afterlink": "2.85 MB [2.81 MB, 2.89 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "417.1 kB [394.7 kB, 439.4 kB]"
+      "baselineValue": "426.6 kB [404.6 kB, 448.5 kB]"
     },
     {
       "family": "hub-death-split",
       "label": "Tasks finished by two teams",
-      "afterlink": "1.53 [1.34, 1.73]",
+      "afterlink": "1.54 [1.34, 1.74]",
       "baseline": "Central dispatcher",
-      "baselineValue": "0.12 [0.07, 0.17]"
+      "baselineValue": "0.04 [0.01, 0.06]"
+    },
+    {
+      "family": "hub-death-split",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.4 s [0.4 s, 0.4 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "hub-death-split",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "835.1 kB [811.5 kB, 858.8 kB]",
+      "afterlink": "766.1 kB [746.5 kB, 785.6 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "14.7 kB [14.3 kB, 15.2 kB]"
+      "baselineValue": "15.2 kB [14.6 kB, 15.7 kB]"
     },
     {
       "family": "hub-death-split",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "835.1 kB [811.5 kB, 858.8 kB]",
+      "afterlink": "766.1 kB [746.5 kB, 785.6 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "63.0 kB [58.2 kB, 67.8 kB]"
+      "baselineValue": "89.4 kB [82.2 kB, 96.6 kB]"
     },
     {
       "family": "hub-death-split",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.09 MB [3.05 MB, 3.13 MB]",
+      "afterlink": "3.02 MB [2.97 MB, 3.06 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "26.3 kB [25.7 kB, 26.8 kB]"
+      "baselineValue": "27.1 kB [26.4 kB, 27.7 kB]"
     },
     {
       "family": "hub-death-split",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.09 MB [3.05 MB, 3.13 MB]",
+      "afterlink": "3.02 MB [2.97 MB, 3.06 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "437.0 kB [418.2 kB, 455.8 kB]"
+      "baselineValue": "445.3 kB [426.9 kB, 463.6 kB]"
     },
     {
       "family": "asymmetric",
@@ -468,37 +482,37 @@
     {
       "family": "asymmetric",
       "label": "Time from heal to convergence",
-      "afterlink": "0.2 s [0.2 s, 0.2 s]",
+      "afterlink": "0.0 s [0.0 s, 0.0 s]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "0.0 s [0.0 s, 0.0 s]"
     },
     {
       "family": "asymmetric",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "265.4 kB [260.8 kB, 270.0 kB]",
-      "baseline": "Central dispatcher",
-      "baselineValue": "7.9 kB [7.5 kB, 8.2 kB]"
-    },
-    {
-      "family": "asymmetric",
-      "label": "Bytes sent from heal to convergence",
-      "afterlink": "265.4 kB [260.8 kB, 270.0 kB]",
+      "afterlink": "11.7 kB [4.2 kB, 19.3 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "138 B [-133 B, 409 B]"
+      "baselineValue": "346 B [-332 B, 1.0 kB]"
     },
     {
       "family": "asymmetric",
       "label": "Bytes sent, whole run",
-      "afterlink": "4.46 MB [4.30 MB, 4.62 MB]",
+      "afterlink": "4.45 MB [4.28 MB, 4.62 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "31.7 kB [31.2 kB, 32.2 kB]"
+      "baselineValue": "32.8 kB [32.3 kB, 33.4 kB]"
     },
     {
       "family": "asymmetric",
       "label": "Bytes sent, whole run",
-      "afterlink": "4.46 MB [4.30 MB, 4.62 MB]",
+      "afterlink": "4.45 MB [4.28 MB, 4.62 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "589.5 kB [561.5 kB, 617.5 kB]"
+      "baselineValue": "590.3 kB [562.3 kB, 618.2 kB]"
+    },
+    {
+      "family": "loss",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.1 s [0.0 s, 0.1 s]",
+      "baseline": "Central dispatcher",
+      "baselineValue": "0.0 s [0.0 s, 0.0 s]"
     },
     {
       "family": "loss",
@@ -510,44 +524,51 @@
     {
       "family": "loss",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "2.1 kB [1.0 kB, 3.1 kB]",
+      "afterlink": "1.8 kB [724 B, 2.8 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "25 B [6 B, 43 B]"
+      "baselineValue": "5 B [-3 B, 13 B]"
     },
     {
       "family": "loss",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "2.1 kB [1.0 kB, 3.1 kB]",
+      "afterlink": "1.8 kB [724 B, 2.8 kB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "17 B [-8 B, 43 B]"
     },
     {
       "family": "loss",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.90 MB [3.85 MB, 3.95 MB]",
+      "afterlink": "3.88 MB [3.83 MB, 3.93 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "44.8 kB [43.7 kB, 45.9 kB]"
+      "baselineValue": "45.7 kB [44.6 kB, 46.9 kB]"
     },
     {
       "family": "loss",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.90 MB [3.85 MB, 3.95 MB]",
+      "afterlink": "3.88 MB [3.83 MB, 3.93 MB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "547.3 kB [533.7 kB, 560.9 kB]"
     },
     {
       "family": "duplication",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.69 MB [3.65 MB, 3.73 MB]",
+      "afterlink": "3.68 MB [3.64 MB, 3.72 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "36.1 kB [35.6 kB, 36.7 kB]"
+      "baselineValue": "37.3 kB [36.8 kB, 37.9 kB]"
     },
     {
       "family": "duplication",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.69 MB [3.65 MB, 3.73 MB]",
+      "afterlink": "3.68 MB [3.64 MB, 3.72 MB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "500.2 kB [489.3 kB, 511.0 kB]"
+    },
+    {
+      "family": "reorder",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.2 s [0.1 s, 0.2 s]",
+      "baseline": "Central dispatcher",
+      "baselineValue": "0.1 s [0.1 s, 0.1 s]"
     },
     {
       "family": "reorder",
@@ -559,63 +580,70 @@
     {
       "family": "reorder",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "5.4 kB [3.8 kB, 7.1 kB]",
+      "afterlink": "5.1 kB [3.6 kB, 6.6 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "80 B [52 B, 108 B]"
+      "baselineValue": "98 B [64 B, 132 B]"
     },
     {
       "family": "reorder",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "5.4 kB [3.8 kB, 7.1 kB]",
+      "afterlink": "5.1 kB [3.6 kB, 6.6 kB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "859 B [556 B, 1.2 kB]"
     },
     {
       "family": "reorder",
       "label": "Bytes sent, whole run",
-      "afterlink": "4.25 MB [4.19 MB, 4.32 MB]",
+      "afterlink": "4.07 MB [4.02 MB, 4.13 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "58.9 kB [56.8 kB, 61.0 kB]"
+      "baselineValue": "124.7 kB [117.4 kB, 131.9 kB]"
     },
     {
       "family": "reorder",
       "label": "Bytes sent, whole run",
-      "afterlink": "4.25 MB [4.19 MB, 4.32 MB]",
+      "afterlink": "4.07 MB [4.02 MB, 4.13 MB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "874.0 kB [836.6 kB, 911.4 kB]"
     },
     {
       "family": "retry-storm",
       "label": "Time from heal to convergence",
-      "afterlink": "0.2 s [0.2 s, 0.3 s]",
+      "afterlink": "0.3 s [0.2 s, 0.4 s]",
+      "baseline": "Central dispatcher",
+      "baselineValue": "0.1 s [0.1 s, 0.1 s]"
+    },
+    {
+      "family": "retry-storm",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.3 s [0.2 s, 0.4 s]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "0.1 s [0.1 s, 0.1 s]"
     },
     {
       "family": "retry-storm",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "9.6 kB [7.2 kB, 12.1 kB]",
+      "afterlink": "9.9 kB [7.3 kB, 12.5 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "176 B [128 B, 224 B]"
+      "baselineValue": "187 B [136 B, 237 B]"
     },
     {
       "family": "retry-storm",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "9.6 kB [7.2 kB, 12.1 kB]",
+      "afterlink": "9.9 kB [7.3 kB, 12.5 kB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "2.2 kB [1.5 kB, 2.8 kB]"
     },
     {
       "family": "retry-storm",
       "label": "Bytes sent, whole run",
-      "afterlink": "4.58 MB [4.49 MB, 4.67 MB]",
+      "afterlink": "4.33 MB [4.26 MB, 4.40 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "74.7 kB [71.6 kB, 77.7 kB]"
+      "baselineValue": "170.5 kB [160.0 kB, 180.9 kB]"
     },
     {
       "family": "retry-storm",
       "label": "Bytes sent, whole run",
-      "afterlink": "4.58 MB [4.49 MB, 4.67 MB]",
+      "afterlink": "4.33 MB [4.26 MB, 4.40 MB]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "1.10 MB [1.05 MB, 1.16 MB]"
     },
@@ -635,31 +663,45 @@
     },
     {
       "family": "transfer-disconnect",
-      "label": "Bytes sent from heal to convergence",
-      "afterlink": "613.1 kB [596.5 kB, 629.6 kB]",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.5 s [0.4 s, 0.5 s]",
       "baseline": "Central dispatcher",
-      "baselineValue": "4.1 kB [3.8 kB, 4.3 kB]"
+      "baselineValue": "0.4 s [0.3 s, 0.4 s]"
+    },
+    {
+      "family": "transfer-disconnect",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.5 s [0.4 s, 0.5 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "transfer-disconnect",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "613.1 kB [596.5 kB, 629.6 kB]",
+      "afterlink": "577.5 kB [561.9 kB, 593.0 kB]",
+      "baseline": "Central dispatcher",
+      "baselineValue": "4.1 kB [3.9 kB, 4.4 kB]"
+    },
+    {
+      "family": "transfer-disconnect",
+      "label": "Bytes sent from heal to convergence",
+      "afterlink": "577.5 kB [561.9 kB, 593.0 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "59.7 kB [55.2 kB, 64.2 kB]"
+      "baselineValue": "72.3 kB [68.5 kB, 76.1 kB]"
     },
     {
       "family": "transfer-disconnect",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.28 MB [3.24 MB, 3.32 MB]",
+      "afterlink": "3.24 MB [3.20 MB, 3.27 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "35.8 kB [35.3 kB, 36.4 kB]"
+      "baselineValue": "37.3 kB [36.7 kB, 37.8 kB]"
     },
     {
       "family": "transfer-disconnect",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.28 MB [3.24 MB, 3.32 MB]",
+      "afterlink": "3.24 MB [3.20 MB, 3.27 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "490.5 kB [474.5 kB, 506.5 kB]"
+      "baselineValue": "486.8 kB [471.2 kB, 502.4 kB]"
     },
     {
       "family": "exclusive-race",
@@ -677,31 +719,45 @@
     },
     {
       "family": "exclusive-race",
-      "label": "Bytes sent from heal to convergence",
-      "afterlink": "1.01 MB [983.6 kB, 1.03 MB]",
+      "label": "Tasks finished by two teams",
+      "afterlink": "0.13 [0.08, 0.18]",
       "baseline": "Central dispatcher",
-      "baselineValue": "16.1 kB [15.6 kB, 16.6 kB]"
+      "baselineValue": "0.04 [0.00, 0.08]"
+    },
+    {
+      "family": "exclusive-race",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.4 s [0.4 s, 0.5 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "exclusive-race",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "1.01 MB [983.6 kB, 1.03 MB]",
+      "afterlink": "905.5 kB [886.4 kB, 924.6 kB]",
+      "baseline": "Central dispatcher",
+      "baselineValue": "16.4 kB [15.9 kB, 16.9 kB]"
+    },
+    {
+      "family": "exclusive-race",
+      "label": "Bytes sent from heal to convergence",
+      "afterlink": "905.5 kB [886.4 kB, 924.6 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "94.8 kB [84.6 kB, 105.1 kB]"
+      "baselineValue": "121.9 kB [111.5 kB, 132.4 kB]"
     },
     {
       "family": "exclusive-race",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.09 MB [3.06 MB, 3.13 MB]",
+      "afterlink": "2.99 MB [2.95 MB, 3.02 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "27.4 kB [26.9 kB, 28.0 kB]"
+      "baselineValue": "28.0 kB [27.4 kB, 28.5 kB]"
     },
     {
       "family": "exclusive-race",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.09 MB [3.06 MB, 3.13 MB]",
+      "afterlink": "2.99 MB [2.95 MB, 3.02 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "627.0 kB [604.9 kB, 649.1 kB]"
+      "baselineValue": "631.5 kB [609.8 kB, 653.2 kB]"
     },
     {
       "family": "stale-observation",
@@ -719,94 +775,115 @@
     },
     {
       "family": "stale-observation",
-      "label": "Bytes sent from heal to convergence",
-      "afterlink": "880.0 kB [858.7 kB, 901.3 kB]",
-      "baseline": "Central dispatcher",
-      "baselineValue": "7.9 kB [7.5 kB, 8.2 kB]"
+      "label": "Time from heal to convergence",
+      "afterlink": "0.4 s [0.4 s, 0.4 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "stale-observation",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "880.0 kB [858.7 kB, 901.3 kB]",
+      "afterlink": "786.0 kB [767.3 kB, 804.8 kB]",
+      "baseline": "Central dispatcher",
+      "baselineValue": "8.1 kB [7.7 kB, 8.5 kB]"
+    },
+    {
+      "family": "stale-observation",
+      "label": "Bytes sent from heal to convergence",
+      "afterlink": "786.0 kB [767.3 kB, 804.8 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "95.7 kB [86.1 kB, 105.2 kB]"
+      "baselineValue": "129.3 kB [117.0 kB, 141.7 kB]"
     },
     {
       "family": "stale-observation",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.12 MB [3.08 MB, 3.16 MB]",
+      "afterlink": "3.02 MB [2.98 MB, 3.06 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "33.5 kB [33.0 kB, 34.0 kB]"
+      "baselineValue": "34.6 kB [34.0 kB, 35.1 kB]"
     },
     {
       "family": "stale-observation",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.12 MB [3.08 MB, 3.16 MB]",
+      "afterlink": "3.02 MB [2.98 MB, 3.06 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "672.4 kB [648.5 kB, 696.3 kB]"
+      "baselineValue": "669.5 kB [645.7 kB, 693.3 kB]"
+    },
+    {
+      "family": "restart-mid-partition",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.4 s [0.4 s, 0.4 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "restart-mid-partition",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "744.6 kB [718.2 kB, 771.0 kB]",
+      "afterlink": "663.0 kB [639.3 kB, 686.7 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "6.4 kB [6.0 kB, 6.8 kB]"
+      "baselineValue": "6.5 kB [6.1 kB, 7.0 kB]"
     },
     {
       "family": "restart-mid-partition",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "744.6 kB [718.2 kB, 771.0 kB]",
+      "afterlink": "663.0 kB [639.3 kB, 686.7 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "72.1 kB [67.5 kB, 76.7 kB]"
+      "baselineValue": "102.6 kB [95.9 kB, 109.3 kB]"
     },
     {
       "family": "restart-mid-partition",
       "label": "Bytes sent, whole run",
-      "afterlink": "2.97 MB [2.92 MB, 3.01 MB]",
+      "afterlink": "2.88 MB [2.83 MB, 2.92 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "32.0 kB [31.4 kB, 32.7 kB]"
+      "baselineValue": "33.3 kB [32.6 kB, 34.0 kB]"
     },
     {
       "family": "restart-mid-partition",
       "label": "Bytes sent, whole run",
-      "afterlink": "2.97 MB [2.92 MB, 3.01 MB]",
+      "afterlink": "2.88 MB [2.83 MB, 2.92 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "441.2 kB [418.5 kB, 464.0 kB]"
+      "baselineValue": "450.8 kB [429.4 kB, 472.1 kB]"
     },
     {
       "family": "ferry-twice",
       "label": "Tasks finished by two teams",
       "afterlink": "1.20 [1.01, 1.38]",
       "baseline": "Central dispatcher",
-      "baselineValue": "0.10 [0.06, 0.15]"
+      "baselineValue": "0.02 [0.00, 0.04]"
+    },
+    {
+      "family": "ferry-twice",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.5 s [0.4 s, 0.6 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "ferry-twice",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "795.2 kB [771.9 kB, 818.4 kB]",
+      "afterlink": "722.4 kB [702.3 kB, 742.5 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "16.1 kB [15.6 kB, 16.6 kB]"
+      "baselineValue": "16.6 kB [16.0 kB, 17.2 kB]"
     },
     {
       "family": "ferry-twice",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "795.2 kB [771.9 kB, 818.4 kB]",
+      "afterlink": "722.4 kB [702.3 kB, 742.5 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "69.3 kB [63.2 kB, 75.5 kB]"
+      "baselineValue": "95.4 kB [89.5 kB, 101.3 kB]"
     },
     {
       "family": "ferry-twice",
       "label": "Bytes sent, whole run",
-      "afterlink": "2.98 MB [2.93 MB, 3.02 MB]",
+      "afterlink": "2.90 MB [2.85 MB, 2.94 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "27.7 kB [27.1 kB, 28.3 kB]"
+      "baselineValue": "28.5 kB [27.8 kB, 29.2 kB]"
     },
     {
       "family": "ferry-twice",
       "label": "Bytes sent, whole run",
-      "afterlink": "2.98 MB [2.93 MB, 3.02 MB]",
+      "afterlink": "2.90 MB [2.85 MB, 2.94 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "404.4 kB [385.5 kB, 423.3 kB]"
+      "baselineValue": "417.5 kB [399.7 kB, 435.4 kB]"
     },
     {
       "family": "incompatible-deps",
@@ -817,150 +894,157 @@
     },
     {
       "family": "incompatible-deps",
-      "label": "Bytes sent from heal to convergence",
-      "afterlink": "985.7 kB [963.5 kB, 1.01 MB]",
-      "baseline": "Central dispatcher",
-      "baselineValue": "9.1 kB [8.8 kB, 9.5 kB]"
+      "label": "Time from heal to convergence",
+      "afterlink": "0.5 s [0.4 s, 0.5 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "incompatible-deps",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "985.7 kB [963.5 kB, 1.01 MB]",
+      "afterlink": "880.3 kB [862.4 kB, 898.1 kB]",
+      "baseline": "Central dispatcher",
+      "baselineValue": "9.2 kB [8.9 kB, 9.5 kB]"
+    },
+    {
+      "family": "incompatible-deps",
+      "label": "Bytes sent from heal to convergence",
+      "afterlink": "880.3 kB [862.4 kB, 898.1 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "97.8 kB [87.7 kB, 108.0 kB]"
+      "baselineValue": "119.8 kB [110.2 kB, 129.4 kB]"
     },
     {
       "family": "incompatible-deps",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.26 MB [3.22 MB, 3.30 MB]",
+      "afterlink": "3.14 MB [3.11 MB, 3.18 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "33.9 kB [33.3 kB, 34.5 kB]"
+      "baselineValue": "34.7 kB [34.1 kB, 35.3 kB]"
     },
     {
       "family": "incompatible-deps",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.26 MB [3.22 MB, 3.30 MB]",
+      "afterlink": "3.14 MB [3.11 MB, 3.18 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "646.4 kB [623.3 kB, 669.4 kB]"
+      "baselineValue": "650.3 kB [628.8 kB, 671.7 kB]"
     },
     {
       "family": "forged-replay",
       "label": "Tasks completed, whole run",
-      "afterlink": "20.55 [19.94, 21.15]",
+      "afterlink": "20.55 [19.94, 21.17]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "22.16 [21.55, 22.78]"
+      "baselineValue": "22.17 [21.56, 22.78]"
     },
     {
       "family": "forged-replay",
       "label": "Exclusive double-bookings",
-      "afterlink": "1.05 [1.01, 1.09]",
+      "afterlink": "1.05 [1.01, 1.10]",
       "baseline": "Central dispatcher",
       "baselineValue": "0 in 200 runs, 95% upper bound 1.9% of runs"
     },
     {
       "family": "forged-replay",
       "label": "Invariant violations, total",
-      "afterlink": "2.52 [2.43, 2.62]",
+      "afterlink": "2.51 [2.42, 2.60]",
       "baseline": "Central dispatcher",
       "baselineValue": "0 in 200 runs, 95% upper bound 1.9% of runs"
     },
     {
       "family": "forged-replay",
       "label": "Finished tasks missing from the merged record",
-      "afterlink": "0.49 [0.42, 0.56]",
+      "afterlink": "0.47 [0.39, 0.54]",
       "baseline": "Central dispatcher",
       "baselineValue": "0 in 200 runs, 95% upper bound 1.9% of runs"
     },
     {
       "family": "forged-replay",
       "label": "Finished tasks missing from the merged record",
-      "afterlink": "0.49 [0.42, 0.56]",
+      "afterlink": "0.47 [0.39, 0.54]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "0 in 200 runs, 95% upper bound 1.9% of runs"
     },
     {
       "family": "forged-replay",
       "label": "Resource conservation breaches",
-      "afterlink": "0.98 [0.96, 1.00]",
+      "afterlink": "0.98 [0.96, 1.01]",
       "baseline": "Central dispatcher",
       "baselineValue": "0 in 200 runs, 95% upper bound 1.9% of runs"
     },
     {
       "family": "forged-replay",
       "label": "Resource conservation breaches",
-      "afterlink": "0.98 [0.96, 1.00]",
+      "afterlink": "0.98 [0.96, 1.01]",
       "baseline": "Offline board (LWW)",
       "baselineValue": "0 in 200 runs, 95% upper bound 1.9% of runs"
     },
     {
       "family": "forged-replay",
-      "label": "Runs that converged",
-      "afterlink": "93.5% (187/200) [89.2%, 96.2%]",
-      "baseline": "Central dispatcher",
-      "baselineValue": "100.0% (200/200) [98.1%, 100.0%]"
-    },
-    {
-      "family": "forged-replay",
-      "label": "Runs that converged",
-      "afterlink": "93.5% (187/200) [89.2%, 96.2%]",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.4 s [0.4 s, 0.4 s]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "100.0% (200/200) [98.1%, 100.0%]"
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "forged-replay",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "810.6 kB [786.9 kB, 834.2 kB], none in 12 of 200",
+      "afterlink": "714.6 kB [694.4 kB, 734.8 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "7.9 kB [7.6 kB, 8.3 kB]"
+      "baselineValue": "8.2 kB [7.8 kB, 8.5 kB]"
     },
     {
       "family": "forged-replay",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "810.6 kB [786.9 kB, 834.2 kB], none in 12 of 200",
+      "afterlink": "714.6 kB [694.4 kB, 734.8 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "88.1 kB [79.1 kB, 97.0 kB]"
+      "baselineValue": "114.0 kB [104.6 kB, 123.4 kB]"
     },
     {
       "family": "forged-replay",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.64 MB [3.34 MB, 3.93 MB]",
+      "afterlink": "3.02 MB [2.98 MB, 3.05 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "31.1 kB [30.5 kB, 31.6 kB]"
+      "baselineValue": "32.0 kB [31.4 kB, 32.6 kB]"
     },
     {
       "family": "forged-replay",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.64 MB [3.34 MB, 3.93 MB]",
+      "afterlink": "3.02 MB [2.98 MB, 3.05 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "602.7 kB [579.2 kB, 626.3 kB]"
+      "baselineValue": "612.7 kB [589.4 kB, 636.0 kB]"
+    },
+    {
+      "family": "membership-churn",
+      "label": "Time from heal to convergence",
+      "afterlink": "0.4 s [0.4 s, 0.5 s]",
+      "baseline": "Offline board (LWW)",
+      "baselineValue": "0.2 s [0.2 s, 0.2 s]"
     },
     {
       "family": "membership-churn",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "639.1 kB [612.3 kB, 665.9 kB], none in 1 of 200",
+      "afterlink": "545.2 kB [522.0 kB, 568.5 kB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "2.9 kB [2.6 kB, 3.1 kB]"
+      "baselineValue": "2.9 kB [2.7 kB, 3.2 kB]"
     },
     {
       "family": "membership-churn",
       "label": "Bytes sent from heal to convergence",
-      "afterlink": "639.1 kB [612.3 kB, 665.9 kB], none in 1 of 200",
+      "afterlink": "545.2 kB [522.0 kB, 568.5 kB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "66.1 kB [60.3 kB, 71.8 kB]"
+      "baselineValue": "92.8 kB [86.2 kB, 99.4 kB]"
     },
     {
       "family": "membership-churn",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.26 MB [3.20 MB, 3.32 MB]",
+      "afterlink": "3.11 MB [3.06 MB, 3.16 MB]",
       "baseline": "Central dispatcher",
-      "baselineValue": "33.3 kB [32.7 kB, 33.9 kB]"
+      "baselineValue": "35.4 kB [34.6 kB, 36.1 kB]"
     },
     {
       "family": "membership-churn",
       "label": "Bytes sent, whole run",
-      "afterlink": "3.26 MB [3.20 MB, 3.32 MB]",
+      "afterlink": "3.11 MB [3.06 MB, 3.16 MB]",
       "baseline": "Offline board (LWW)",
-      "baselineValue": "427.5 kB [411.9 kB, 443.1 kB]"
+      "baselineValue": "445.8 kB [430.5 kB, 461.2 kB]"
     }
   ]
 }

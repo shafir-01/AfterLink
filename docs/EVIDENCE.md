@@ -10,7 +10,7 @@ Four field devices run as four same-origin frames, each with its own Ed25519 key
 
 | Claim | What to look for | Automated check |
 |---|---|---|
-| Killing HQ does not stop the mission | After Break the network, a new request is still assigned and completed by peers over open channels | Mesh and actor tests that stop the signalling hub and continue to exchange events |
+| Killing HQ does not stop the mission | After the HQ tower is killed, a new request is still assigned and completed by peers over open channels | Mesh and actor tests that stop the signalling hub and continue to exchange events |
 | A partition really cuts links | Each device lists its link states, and blocked peers show as severed with no bytes counted | Mesh tests assert that severed links stop delivering |
 | A scarce token is never promised twice | One side's request for the contested resource is refused with a stated reason, the other side commits | Authority tests and property tests on token conservation |
 | A lost acknowledgement does not refund a token | The token shows as in transit to everyone and cannot be committed by the sender | Authority tests on the transfer lifecycle |

@@ -9,17 +9,20 @@ npm install
 npm run dev
 ```
 
-Open the address Vite prints. The stage loads four team devices and a headquarters observer on the same page.
+Open the address Vite prints, or use https://shafir-01.github.io/AfterLink/. You will see a festival map with four teams walking between tasks, the live links between them and an HQ tower. Four real devices and a headquarters worker run behind it.
 
 ## The path
 
-1. Look at the stage. Four teams, Medics, Access, Facilities and Supply, share one mission. Each device shows its own next action.
-2. Select Break the network. The headquarters worker is terminated, so the observer and signalling are gone. Send a new request from the stage and watch peers assign it and complete it with no coordinator.
-3. Select Split. The mesh divides into two groups and each device closes its connections to the other side. Both groups still accept work, and each shows a different knowledge horizon.
-4. Request the contested resource from both sides. One side commits. The other is refused, and the refusal says which right it lacks and what it can do next.
-5. Select Carry update. A signed packet appears as QR frames on one device and is read by the other through its camera path. The receiving device gains the new information. Carry the same packet again and nothing is applied twice.
-6. Select Restore contact. Signalling returns, links reopen and logs reconcile. The observer fills in the interval it could not see.
-7. Open the debrief. It lists what was done while headquarters was blind, what was refused and why, what was kept as a policy conflict, and what remains unknown.
+1. Watch the map for a moment. Medics, Access, Facilities and Supply share one mission, and each pulse on a line is a real delivery between two devices.
+2. Break the network. Click the HQ tower, which becomes "HQ down" with its last confirmed time. Drop a request on the map, such as first aid, and watch peers assign it and finish it with no coordinator.
+3. Split the teams. Drag across a line to cut it, and the connection behind it is really closed. Tap a team to see through its eyes, where the map shows only what that device knows.
+4. Request the contested resource from both islands. One side commits. The other is refused, and the refusal says which right it lacks and what it can do next.
+5. Carry the update. Drag a courier to the other group. The signed packet crosses as QR frames that the receiving device decodes. Carry it again and nothing is applied twice.
+6. Restore contact. Drag a cut line back together. A link that closed while HQ was down reads as waiting for HQ until you restart the tower, because reopening needs signalling.
+7. See what happened. The debrief lists what was done while headquarters was blind, what was refused and why, what was kept as a policy conflict, and what remains unknown.
+8. Verify the file yourself. From the debrief choose Verify this run, or drop an exported file on the Verify page. You can also run `npx tsx packages/proof/src/cli.ts mission.afterlink`. Change one byte of the file and the check fails at the exact step.
+
+The same path works from the keyboard, and on a narrow screen the map becomes a list of teams, links, courier routes and the tower. Use real phones switches to separate devices.
 
 ## Inspect it
 
