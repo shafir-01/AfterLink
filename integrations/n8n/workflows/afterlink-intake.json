@@ -1,0 +1,966 @@
+{
+  "name": "AfterLink Intake",
+  "nodes": [
+    {
+      "id": "intake-webhook",
+      "name": "Intake webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "afterlink-intake",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "afterlink/intake",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Edit these two values after pasting.\nconst relayUrl = 'https://YOUR-RELAY-URL';\nconst secret = 'YOUR-SHARED-SECRET';\nreturn $input.all().map((i) => ({ json: { ...i.json, config: { relayUrl: relayUrl.replace(/[/]+$/, ''), secret } } }));"
+      }
+    },
+    {
+      "name": "Webhook run?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        330,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w",
+              "leftValue": "={{ $json.headers !== undefined }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Validate and assign id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const raw = $input.first().json;\nconst b = raw.body && typeof raw.body === 'object' ? raw.body : raw;\nconst s = (v) => (typeof v === 'string' ? v.trim() : '');\nconst errors = [];\nconst title = s(b.title).slice(0, 120);\nconst description = s(b.description).slice(0, 500);\nconst locationName = s(b.locationName).slice(0, 80);\nconst contact = s(b.contact).slice(0, 120);\nif (title.length < 3) errors.push('title is required (3 to 120 characters)');\nlet location;\nif (b.location && Number.isFinite(Number(b.location.x)) && Number.isFinite(Number(b.location.y))) {\n  const c = (n) => Math.min(100, Math.max(0, Number(n)));\n  location = { x: c(b.location.x), y: c(b.location.y) };\n}\nconst supplied = s(b.sourceId);\nif (supplied && !/^[A-Za-z0-9._:-]{8,128}$/.test(supplied)) errors.push('sourceId must be 8 to 128 characters of letters, digits, . _ : -');\nconst fnv = (str, seed) => { let h = seed >>> 0; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(16).padStart(8, '0'); };\nconst basis = [title, description, locationName, contact].join('|').toLowerCase();\nconst sourceId = supplied || 'req-' + fnv(basis, 2166136261) + fnv(basis, 3339675911);\nconst request = { title, description, locationName };\nif (location) request.location = location;\nreturn [{ json: { valid: errors.length === 0, errors, sourceId, request, contact, receivedAt: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Reject invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ state: \"rejected\", errors: $json.errors }) }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    },
+    {
+      "name": "Triage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        -80
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.config.relayUrl }}/api/triage",
+        "sendHeaders": false,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.request.title + '. ' + $json.request.description, source: 'intake' }) }}",
+        "options": {
+          "timeout": 6000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Classify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const base = $('Validate and assign id').first().json;\nconst t = $input.first().json;\nconst triage = t && t.statusCode >= 200 && t.statusCode < 300 && t.body && typeof t.body === 'object' ? t.body : null;\nconst text = (base.request.title + ' ' + base.request.description).toLowerCase();\nconst rules = [\n  { re: /(collaps|unconscious|faint|bleed|injur|hurt|allerg|asthma|chest|first aid|medic|not breathing|seizure)/, kind: 'medical', priority: 1, requires: ['first-aid'] },\n  { re: /(wheelchair|mobility|cannot walk|can't walk|stuck|evacuat|elderly)/, kind: 'mobility', priority: 1, requires: ['mobility'] },\n  { re: /(broken|leak|spill|fallen|barrier|power|repair|blocked|unsafe|fence|stage)/, kind: 'repair', priority: 2, requires: ['repair'] },\n  { re: /(water|food|supplies|deliver|haul|stock|restock|carry)/, kind: 'haul', priority: 3, requires: ['haul'] },\n];\nconst hit = rules.find((r) => r.re.test(text));\nconst fromRules = hit ? { kind: hit.kind, priority: hit.priority, requires: hit.requires } : { kind: 'assist', priority: 3, requires: [] };\nconst ok = triage && typeof triage.kind === 'string' && [1, 2, 3].includes(Number(triage.priority));\nconst classification = ok\n  ? { kind: triage.kind, priority: Number(triage.priority), requires: Array.isArray(triage.requires) ? triage.requires.map(String) : fromRules.requires, ...(Array.isArray(triage.needs) ? { needs: triage.needs } : {}), method: 'triage' }\n  : { ...fromRules, method: 'rules' };\nreturn [{ json: { sourceId: base.sourceId, payload: { sourceId: base.sourceId, request: base.request, classification }, classification } }];"
+      }
+    },
+    {
+      "name": "Deliver attempt 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -80
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.config.relayUrl }}/ingress/request",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-afterlink-ingress-secret",
+              "value": "={{ $('Config').first().json.config.secret }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Classify').first().json.payload) }}",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Attempt 1 ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Attempt 1 ok?",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Backoff 2s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        100
+      ],
+      "webhookId": "backoff-2s",
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 2,
+        "unit": "seconds"
+      }
+    },
+    {
+      "name": "Deliver attempt 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.config.relayUrl }}/ingress/request",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-afterlink-ingress-secret",
+              "value": "={{ $('Config').first().json.config.secret }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Classify').first().json.payload) }}",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Attempt 2 ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Attempt 2 ok?",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Backoff 4s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        280
+      ],
+      "webhookId": "backoff-4s",
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 4,
+        "unit": "seconds"
+      }
+    },
+    {
+      "name": "Deliver attempt 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        280
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.config.relayUrl }}/ingress/request",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-afterlink-ingress-secret",
+              "value": "={{ $('Config').first().json.config.secret }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Classify').first().json.payload) }}",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Attempt 3 ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        280
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Attempt 3 ok?",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Backoff 8s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2200,
+        460
+      ],
+      "webhookId": "backoff-8s",
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 8,
+        "unit": "seconds"
+      }
+    },
+    {
+      "name": "Deliver attempt 4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        460
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.config.relayUrl }}/ingress/request",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-afterlink-ingress-secret",
+              "value": "={{ $('Config').first().json.config.secret }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Classify').first().json.payload) }}",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Attempt 4 ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        460
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Attempt 4 ok?",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Success state",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        -80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const r = $input.first().json;\nconst c = $('Classify').first().json;\nconst body = r.body && typeof r.body === 'object' ? r.body : {};\nlet attempts = 1;\nfor (const n of ['Deliver attempt 2', 'Deliver attempt 3', 'Deliver attempt 4']) { try { if ($(n).isExecuted) attempts++; } catch (e) {} }\nreturn [{ json: {\n  sourceId: c.sourceId,\n  state: body.state === 'delivered' ? 'delivered' : 'queued-at-relay',\n  duplicate: Boolean(body.duplicate),\n  taskId: body.taskId || null,\n  classification: c.classification,\n  attempts,\n  detail: body.state === 'delivered' ? 'A connected device received the request.' : 'The relay holds the request until a device connects.',\n} }];"
+      }
+    },
+    {
+      "name": "Respond delivered",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2860,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "name": "Dead letter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        460
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const c = $('Classify').first().json;\nconst store = $getWorkflowStaticData('global');\nstore.deadLetters = store.deadLetters || [];\nif (!store.deadLetters.some((d) => d.sourceId === c.sourceId)) {\n  store.deadLetters.push({ sourceId: c.sourceId, payload: c.payload, failedAt: new Date().toISOString(), tries: 4 });\n}\nreturn [{ json: { sourceId: c.sourceId, state: 'held-for-retry', classification: c.classification, attempts: 4, detail: 'The relay did not answer. The request is stored and retried every two minutes.', held: store.deadLetters.length } }];"
+      }
+    },
+    {
+      "name": "Respond held",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3080,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    },
+    {
+      "name": "Retry every 2 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        760
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Load dead letters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        760
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const store = $getWorkflowStaticData('global');\nconst list = store.deadLetters || [];\nreturn list.map((d) => ({ json: { sourceId: d.sourceId, payload: d.payload } }));"
+      }
+    },
+    {
+      "name": "Redeliver",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        760
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.config.relayUrl }}/ingress/request",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-afterlink-ingress-secret",
+              "value": "={{ $('Config').first().json.config.secret }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Settle dead letters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        760
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const sent = $('Load dead letters').all();\nconst store = $getWorkflowStaticData('global');\nconst delivered = new Set();\n$input.all().forEach((item, i) => {\n  const code = item.json.statusCode;\n  if (code >= 200 && code < 300) delivered.add(sent[i].json.sourceId);\n});\nstore.deadLetters = (store.deadLetters || []).filter((d) => {\n  if (delivered.has(d.sourceId)) return false;\n  d.tries = (d.tries || 0) + 1;\n  return true;\n});\nstore.redelivered = (store.redelivered || 0) + delivered.size;\nreturn [{ json: { redelivered: delivered.size, stillHeld: store.deadLetters.length, totalRedelivered: store.redelivered } }];"
+      }
+    },
+    {
+      "id": "request-form-page",
+      "name": "Request form page",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1000
+      ],
+      "webhookId": "afterlink-request",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "afterlink/request",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Serve form",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        1000
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Request assistance</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:0 1rem;color:#111}label{display:block;margin-top:1rem;font-weight:600}input,textarea{width:100%;box-sizing:border-box;padding:.6rem;font:inherit;border:1px solid #888;border-radius:6px}button{margin-top:1.25rem;padding:.7rem 1.2rem;font:inherit;font-weight:600;border:0;border-radius:6px;background:#111;color:#fff;cursor:pointer}#out{margin-top:1.25rem;white-space:pre-wrap}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}input,textarea{background:#1c1c1c;color:#eee}button{background:#eee;color:#111}}</style></head><body><h1>Request assistance</h1><form id=\"f\"><label for=\"title\">What is happening</label><input id=\"title\" name=\"title\" required minlength=\"3\" maxlength=\"120\"><label for=\"description\">Details</label><textarea id=\"description\" name=\"description\" rows=\"3\" maxlength=\"500\"></textarea><label for=\"locationName\">Where</label><input id=\"locationName\" name=\"locationName\" maxlength=\"80\"><label for=\"contact\">Contact (optional)</label><input id=\"contact\" name=\"contact\" maxlength=\"120\"><button type=\"submit\">Send request</button></form><p id=\"out\" role=\"status\" aria-live=\"polite\"></p><script>var id='form-'+(crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random().toString(16).slice(2));document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var d=Object.fromEntries(new FormData(e.target));d.sourceId=id;var o=document.getElementById('out');o.textContent='Sending...';fetch('/webhook/afterlink/intake',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(d)}).then(function(r){return r.json()}).then(function(j){o.textContent=j.errors?j.errors.join('. '):'Request '+j.sourceId+': '+j.state.replace(/-/g,' ')+'. '+(j.detail||'')}).catch(function(){o.textContent='Could not reach the intake. Try again.'})});</script></body></html>",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Intake webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry every 2 minutes": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Webhook run?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook run?": {
+      "main": [
+        [
+          {
+            "node": "Validate and assign id",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load dead letters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and assign id": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Triage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Triage": {
+      "main": [
+        [
+          {
+            "node": "Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify": {
+      "main": [
+        [
+          {
+            "node": "Deliver attempt 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver attempt 1": {
+      "main": [
+        [
+          {
+            "node": "Attempt 1 ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attempt 1 ok?": {
+      "main": [
+        [
+          {
+            "node": "Success state",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Backoff 2s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backoff 2s": {
+      "main": [
+        [
+          {
+            "node": "Deliver attempt 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver attempt 2": {
+      "main": [
+        [
+          {
+            "node": "Attempt 2 ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attempt 2 ok?": {
+      "main": [
+        [
+          {
+            "node": "Success state",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Backoff 4s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backoff 4s": {
+      "main": [
+        [
+          {
+            "node": "Deliver attempt 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver attempt 3": {
+      "main": [
+        [
+          {
+            "node": "Attempt 3 ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attempt 3 ok?": {
+      "main": [
+        [
+          {
+            "node": "Success state",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Backoff 8s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backoff 8s": {
+      "main": [
+        [
+          {
+            "node": "Deliver attempt 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver attempt 4": {
+      "main": [
+        [
+          {
+            "node": "Attempt 4 ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attempt 4 ok?": {
+      "main": [
+        [
+          {
+            "node": "Success state",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Dead letter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Success state": {
+      "main": [
+        [
+          {
+            "node": "Respond delivered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dead letter": {
+      "main": [
+        [
+          {
+            "node": "Respond held",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load dead letters": {
+      "main": [
+        [
+          {
+            "node": "Redeliver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redeliver": {
+      "main": [
+        [
+          {
+            "node": "Settle dead letters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request form page": {
+      "main": [
+        [
+          {
+            "node": "Serve form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
