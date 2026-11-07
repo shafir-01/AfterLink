@@ -411,7 +411,7 @@ export function World({ controller }: { controller: StageController }) {
                 );
               })}
             {radial && (
-              <div className="w-radial" style={{ transform: `translate(${radial.x}px, ${radial.y}px)` }} role="group" aria-label="Raise a request here">
+              <div className="w-radial" onPointerDown={(e) => e.stopPropagation()} style={{ transform: `translate(${radial.x}px, ${radial.y}px)` }} role="group" aria-label="Raise a request here">
                 <span className="w-radial-dot" aria-hidden="true" />
                 {REQUESTS.map((r, i) => {
                   const { dx, dy } = radialSpot(i, radial, frame);
